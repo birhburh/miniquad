@@ -23,7 +23,7 @@ import android.content.Context;
 import android.content.Intent;
 
 import android.graphics.Color;
-import android.graphics.Insets;
+// import android.graphics.Insets;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.widget.LinearLayout;
@@ -205,8 +205,8 @@ class ResizingLayout
 
     @Override
     public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
-        Insets imeInsets = insets.getInsets(WindowInsets.Type.ime());
-        v.setPadding(0, 0, 0, imeInsets.bottom);
+        // Insets imeInsets = insets.getInsets(WindowInsets.Type.ime());
+        // v.setPadding(0, 0, 0, imeInsets.bottom);
         return insets;
     }
 }
@@ -289,7 +289,7 @@ public class MainActivity extends Activity {
                         getWindow().setFlags(LayoutParams.FLAG_LAYOUT_NO_LIMITS, LayoutParams.FLAG_LAYOUT_NO_LIMITS);
                         getWindow().getAttributes().layoutInDisplayCutoutMode = LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
                         if (Build.VERSION.SDK_INT >= 30) {
-                            getWindow().setDecorFitsSystemWindows(false);
+                            // getWindow().setDecorFitsSystemWindows(false);
                         } else {
                             int uiOptions = View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
                             decorView.setSystemUiVisibility(uiOptions);
@@ -297,7 +297,7 @@ public class MainActivity extends Activity {
                     }
                     else {
                         if (Build.VERSION.SDK_INT >= 30) {
-                            getWindow().setDecorFitsSystemWindows(true);
+                            // getWindow().setDecorFitsSystemWindows(true);
                         } else {
                           decorView.setSystemUiVisibility(0);
                         }
