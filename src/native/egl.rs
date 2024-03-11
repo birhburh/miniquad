@@ -156,6 +156,14 @@ pub type PFNEGLQUERYSURFACEPROC = ::std::option::Option<
 >;
 pub type PFNEGLSWAPBUFFERSPROC =
     ::std::option::Option<unsafe extern "C" fn(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean>;
+pub type PFNEGLSWAPBUFFERSWITHDAMAGEKHRPROC = ::std::option::Option<
+    unsafe extern "C" fn(
+        dpy: EGLDisplay,
+        surface: EGLSurface,
+        rects: *mut EGLint,
+        n_rects: EGLint,
+    ) -> EGLBoolean,
+>;
 pub type PFNEGLTERMINATEPROC =
     ::std::option::Option<unsafe extern "C" fn(dpy: EGLDisplay) -> EGLBoolean>;
 pub type PFNEGLWAITGLPROC = ::std::option::Option<unsafe extern "C" fn() -> EGLBoolean>;
@@ -201,6 +209,7 @@ pub struct LibEgl {
     pub eglQueryString: PFNEGLQUERYSTRINGPROC,
     pub eglQuerySurface: PFNEGLQUERYSURFACEPROC,
     pub eglSwapBuffers: PFNEGLSWAPBUFFERSPROC,
+    pub eglSwapBuffersWithDamageKHR: PFNEGLSWAPBUFFERSWITHDAMAGEKHRPROC,
     pub eglTerminate: PFNEGLTERMINATEPROC,
     pub eglWaitGL: PFNEGLWAITGLPROC,
     pub eglWaitNative: PFNEGLWAITNATIVEPROC,
@@ -236,6 +245,7 @@ impl LibEgl {
                 eglQueryString: module.get_symbol("eglQueryString").ok(),
                 eglQuerySurface: module.get_symbol("eglQuerySurface").ok(),
                 eglSwapBuffers: module.get_symbol("eglSwapBuffers").ok(),
+                eglSwapBuffersWithDamageKHR: module.get_symbol("eglSwapBuffersWithDamageKHR").ok(),
                 eglTerminate: module.get_symbol("eglTerminate").ok(),
                 eglWaitGL: module.get_symbol("eglWaitGL").ok(),
                 eglWaitNative: module.get_symbol("eglWaitNative").ok(),

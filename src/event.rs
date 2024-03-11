@@ -164,7 +164,7 @@ pub trait EventHandler {
     /// while app is still alive and can do some usefull calculations.
     /// Note that in this case drawing from update may lead to crashes.
     fn update(&mut self);
-    fn draw(&mut self);
+    fn draw(&mut self) -> bool;
     fn resize_event(&mut self, _width: f32, _height: f32) {}
     fn mouse_motion_event(&mut self, _x: f32, _y: f32) {}
     fn mouse_wheel_event(&mut self, _x: f32, _y: f32) {}

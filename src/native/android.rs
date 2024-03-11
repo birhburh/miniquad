@@ -259,10 +259,18 @@ impl MainThreadState {
         self.event_handler.update();
 
         if self.surface.is_null() == false {
-            self.event_handler.draw();
+            if self.event_handler.draw() {
+                unsafe {
+                    let rects = vec![0, 0, 100, 100];
 
-            unsafe {
-                (self.libegl.eglSwapBuffers.unwrap())(self.egl_display, self.surface);
+                    // (self.libegl.eglSwapBuffers.unwrap())(self.egl_display, self.surface);
+                    (self.libegl.eglSwapBuffersWithDamageKHR.unwrap())(
+                        self.egl_display,
+                        self.surface,
+                        rects.as_ptr() as _,
+                        1,
+                    );
+                }
             }
         }
     }
