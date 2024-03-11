@@ -650,12 +650,7 @@ pub fn define_opengl_view_class() -> *const Class {
     extern "C" fn draw_rect(this: &Object, _sel: Sel, _rect: NSRect) {
         let payload = get_window_payload(this);
 
-        while let Ok(request) = payload.native_requests.try_recv() {
-            payload.process_request(request);
-        }
-
         if let Some(event_handler) = payload.context() {
-            event_handler.update();
             event_handler.draw();
         }
 
@@ -696,8 +691,21 @@ pub fn define_opengl_view_class() -> *const Class {
     }
 
     extern "C" fn timer_fired(this: &Object, _sel: Sel, _: ObjcId) {
-        unsafe {
-            let () = msg_send!(this, setNeedsDisplay: YES);
+        let payload = get_window_payload(this);
+
+        while let Ok(request) = payload.native_requests.try_recv() {
+            payload.process_request(request);
+        }
+
+        let mut repaint = false;
+        if let Some(event_handler) = payload.context() {
+            repaint = event_handler.update();
+        }
+
+        if repaint {
+            unsafe {
+                let () = msg_send!(this, setNeedsDisplay: YES);
+            }
         }
     }
     let superclass = class!(NSOpenGLView);
@@ -733,12 +741,6 @@ pub fn define_metal_view_class() -> *const Class {
     decl.add_ivar::<*mut c_void>("display_ptr");
 
     extern "C" fn timer_fired(this: &Object, _sel: Sel, _: ObjcId) {
-        unsafe {
-            let () = msg_send!(this, setNeedsDisplay: YES);
-        }
-    }
-
-    extern "C" fn draw_rect(this: &Object, _sel: Sel, _rect: NSRect) {
         let payload = get_window_payload(this);
 
         if payload.event_handler.is_none() {
@@ -750,8 +752,22 @@ pub fn define_metal_view_class() -> *const Class {
             payload.process_request(request);
         }
 
+        let mut repaint = false;
         if let Some(event_handler) = payload.context() {
-            event_handler.update();
+            repaint = event_handler.update();
+        }
+        if (repaint)
+        {
+            unsafe {
+                let () = msg_send!(this, setNeedsDisplay: YES);
+            }
+        }
+    }
+
+    extern "C" fn draw_rect(this: &Object, _sel: Sel, _rect: NSRect) {
+        let payload = get_window_payload(this);
+
+        if let Some(event_handler) = payload.context() {
             event_handler.draw();
         }
 
@@ -864,6 +880,32 @@ impl crate::native::Clipboard for MacosClipboard {
     fn set(&mut self, _data: &str) {}
 }
 
+unsafe fn font_info(font : ObjcId, label: &str) {
+    let font_name = nsstring_to_string(msg_send![font, fontName]);
+    let font_display_name = nsstring_to_string(msg_send![font, displayName]);
+    let font_family = nsstring_to_string(msg_send![font, familyName]);
+    let font_point_size : f64 = msg_send![font, pointSize];
+
+    let descriptor : ObjcId = msg_send![font, fontDescriptor];
+    let font_point_size_2 : f64 = msg_send![descriptor, pointSize];
+    let font_attributes : ObjcId = msg_send![descriptor, fontAttributes];
+    let font_size: f64 = msg_send![font_attributes, objectForKey:str_to_nsstring("NSFontSizeAttribute")];
+    let font_name_attr = nsstring_to_string(msg_send![font_attributes, objectForKey:str_to_nsstring("NSFontNameAttribute")]);
+    let font_visible_attr = nsstring_to_string(msg_send![font_attributes, objectForKey:str_to_nsstring("NSFontVisibleNameAttribute")]);
+    let font_family_attr = nsstring_to_string(msg_send![font_attributes, objectForKey:str_to_nsstring("NSFontFamilyAttribute")]);
+
+    println!("\n{label} FONT:");
+    println!("NAME: {font_name}");
+    println!("DISPLAY NAME: {font_display_name}");
+    println!("FAMILY: {font_family}");
+    println!("POINT SIZE: {font_point_size}");
+    println!("POINT SIZE 2: {font_point_size_2}");
+    println!("FONT SIZE: {font_size:?}");
+    println!("FONT NAME ATTR: {font_name_attr:?}");
+    println!("FONT VISIBLE ATTR: {font_visible_attr:?}");
+    println!("FONT FAMILY ATTR: {font_family_attr:?}");
+}
+
 pub unsafe fn run<F>(conf: crate::conf::Conf, f: F)
 where
     F: 'static + FnOnce() -> Box<dyn EventHandler>,
@@ -902,6 +944,14 @@ where
             as i64
     ];
     let () = msg_send![ns_app, activateIgnoringOtherApps: YES];
+
+    let default_font_size : f64 = msg_send![class!(NSFont), systemFontSize];
+    dbg!(default_font_size);
+
+    let font : ObjcId = msg_send![class!(NSFont), systemFontOfSize:0.0];
+    font_info(font, "SYS");
+    let font : ObjcId = msg_send![class!(NSFont), userFontOfSize:0.0];
+    font_info(font, "USR");
 
     let window_masks = NSWindowStyleMask::NSTitledWindowMask as u64
         | NSWindowStyleMask::NSClosableWindowMask as u64

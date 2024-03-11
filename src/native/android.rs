@@ -256,10 +256,11 @@ impl MainThreadState {
     }
 
     fn frame(&mut self) {
-        self.event_handler.update();
+        let repaint = self.event_handler.update();
 
         if self.surface.is_null() == false {
-            if self.event_handler.draw() {
+            if repaint {
+                self.event_handler.draw();
                 unsafe {
                     let rects = vec![0, 0, 100, 100];
 
