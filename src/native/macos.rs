@@ -33,6 +33,7 @@ pub struct MacosDisplay {
     f: Option<Box<dyn 'static + FnOnce() -> Box<dyn EventHandler>>>,
     modifiers: Modifiers,
     native_requests: Receiver<Request>,
+    repainted: bool,
 }
 
 impl MacosDisplay {
@@ -654,6 +655,8 @@ pub fn define_opengl_view_class() -> *const Class {
             event_handler.draw();
         }
 
+        payload.repainted = true;
+
         unsafe {
             let ctx: ObjcId = msg_send![this, openGLContext];
             assert!(!ctx.is_null());
@@ -698,11 +701,15 @@ pub fn define_opengl_view_class() -> *const Class {
         }
 
         let mut repaint = false;
+        let repainted = payload.repainted;
         if let Some(event_handler) = payload.context() {
-            repaint = event_handler.update();
+            if repainted {
+                repaint = event_handler.update();
+            }
         }
 
         if repaint {
+            payload.repainted = false;
             unsafe {
                 let () = msg_send!(this, setNeedsDisplay: YES);
             }
@@ -756,8 +763,7 @@ pub fn define_metal_view_class() -> *const Class {
         if let Some(event_handler) = payload.context() {
             repaint = event_handler.update();
         }
-        if (repaint)
-        {
+        if (repaint) {
             unsafe {
                 let () = msg_send!(this, setNeedsDisplay: YES);
             }
@@ -880,19 +886,26 @@ impl crate::native::Clipboard for MacosClipboard {
     fn set(&mut self, _data: &str) {}
 }
 
-unsafe fn font_info(font : ObjcId, label: &str) {
+unsafe fn font_info(font: ObjcId, label: &str) {
     let font_name = nsstring_to_string(msg_send![font, fontName]);
     let font_display_name = nsstring_to_string(msg_send![font, displayName]);
     let font_family = nsstring_to_string(msg_send![font, familyName]);
-    let font_point_size : f64 = msg_send![font, pointSize];
+    let font_point_size: f64 = msg_send![font, pointSize];
 
-    let descriptor : ObjcId = msg_send![font, fontDescriptor];
-    let font_point_size_2 : f64 = msg_send![descriptor, pointSize];
-    let font_attributes : ObjcId = msg_send![descriptor, fontAttributes];
-    let font_size: f64 = msg_send![font_attributes, objectForKey:str_to_nsstring("NSFontSizeAttribute")];
-    let font_name_attr = nsstring_to_string(msg_send![font_attributes, objectForKey:str_to_nsstring("NSFontNameAttribute")]);
-    let font_visible_attr = nsstring_to_string(msg_send![font_attributes, objectForKey:str_to_nsstring("NSFontVisibleNameAttribute")]);
-    let font_family_attr = nsstring_to_string(msg_send![font_attributes, objectForKey:str_to_nsstring("NSFontFamilyAttribute")]);
+    let descriptor: ObjcId = msg_send![font, fontDescriptor];
+    let font_point_size_2: f64 = msg_send![descriptor, pointSize];
+    let font_attributes: ObjcId = msg_send![descriptor, fontAttributes];
+    let font_size: f64 =
+        msg_send![font_attributes, objectForKey:str_to_nsstring("NSFontSizeAttribute")];
+    let font_name_attr = nsstring_to_string(
+        msg_send![font_attributes, objectForKey:str_to_nsstring("NSFontNameAttribute")],
+    );
+    let font_visible_attr = nsstring_to_string(
+        msg_send![font_attributes, objectForKey:str_to_nsstring("NSFontVisibleNameAttribute")],
+    );
+    let font_family_attr = nsstring_to_string(
+        msg_send![font_attributes, objectForKey:str_to_nsstring("NSFontFamilyAttribute")],
+    );
 
     println!("\n{label} FONT:");
     println!("NAME: {font_name}");
@@ -931,6 +944,7 @@ where
         event_handler: None,
         native_requests: rx,
         modifiers: Modifiers::default(),
+        repainted: true,
     };
 
     let app_delegate_class = define_app_delegate();
@@ -945,12 +959,12 @@ where
     ];
     let () = msg_send![ns_app, activateIgnoringOtherApps: YES];
 
-    let default_font_size : f64 = msg_send![class!(NSFont), systemFontSize];
+    let default_font_size: f64 = msg_send![class!(NSFont), systemFontSize];
     dbg!(default_font_size);
 
-    let font : ObjcId = msg_send![class!(NSFont), systemFontOfSize:0.0];
+    let font: ObjcId = msg_send![class!(NSFont), systemFontOfSize:0.0];
     font_info(font, "SYS");
-    let font : ObjcId = msg_send![class!(NSFont), userFontOfSize:0.0];
+    let font: ObjcId = msg_send![class!(NSFont), userFontOfSize:0.0];
     font_info(font, "USR");
 
     let window_masks = NSWindowStyleMask::NSTitledWindowMask as u64
