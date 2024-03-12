@@ -633,12 +633,34 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
 pub fn define_opengl_view_class() -> *const Class {
     //extern "C" fn dealloc(this: &Object, _sel: Sel) {}
 
+    extern "C" fn call_update(this: &Object, _sel: Sel) -> bool {
+        let payload = get_window_payload(this);
+
+        while let Ok(request) = payload.native_requests.try_recv() {
+            payload.process_request(request);
+        }
+
+        let mut repaint = false;
+        let repainted = payload.repainted;
+        if let Some(event_handler) = payload.context() {
+            if repainted {
+                repaint = event_handler.update();
+            }
+        }
+
+        if repaint {
+            payload.repainted = false;
+        }
+        repaint
+    }
+
     extern "C" fn reshape(this: &Object, _sel: Sel) {
         let payload = get_window_payload(this);
 
         unsafe {
             let superclass = superclass(this);
             let () = msg_send![super(this, superclass), reshape];
+            let () = msg_send![this, call_update];
 
             if let Some((w, h)) = payload.update_dimensions() {
                 if let Some(event_handler) = payload.context() {
@@ -650,6 +672,8 @@ pub fn define_opengl_view_class() -> *const Class {
 
     extern "C" fn draw_rect(this: &Object, _sel: Sel, _rect: NSRect) {
         let payload = get_window_payload(this);
+
+        // println!("draw_rect");
 
         if let Some(event_handler) = payload.context() {
             event_handler.draw();
@@ -696,29 +720,22 @@ pub fn define_opengl_view_class() -> *const Class {
     extern "C" fn timer_fired(this: &Object, _sel: Sel, _: ObjcId) {
         let payload = get_window_payload(this);
 
-        while let Ok(request) = payload.native_requests.try_recv() {
-            payload.process_request(request);
-        }
-
-        let mut repaint = false;
-        let repainted = payload.repainted;
-        if let Some(event_handler) = payload.context() {
-            if repainted {
-                repaint = event_handler.update();
-            }
-        }
+        let repaint = unsafe {
+            msg_send![this, call_update]
+        };
 
         if repaint {
-            payload.repainted = false;
             unsafe {
                 let () = msg_send!(this, setNeedsDisplay: YES);
             }
         }
     }
+
     let superclass = class!(NSOpenGLView);
     let mut decl: ClassDecl = ClassDecl::new("RenderViewClass", superclass).unwrap();
     unsafe {
         //decl.add_method(sel!(dealloc), dealloc as extern "C" fn(&Object, Sel));
+        decl.add_method(sel!(call_update), call_update as extern "C" fn(&Object, Sel) -> bool);
         decl.add_method(
             sel!(timerFired:),
             timer_fired as extern "C" fn(&Object, Sel, ObjcId),
@@ -959,13 +976,13 @@ where
     ];
     let () = msg_send![ns_app, activateIgnoringOtherApps: YES];
 
-    let default_font_size: f64 = msg_send![class!(NSFont), systemFontSize];
-    dbg!(default_font_size);
+    // let default_font_size: f64 = msg_send![class!(NSFont), systemFontSize];
+    // dbg!(default_font_size);
 
-    let font: ObjcId = msg_send![class!(NSFont), systemFontOfSize:0.0];
-    font_info(font, "SYS");
-    let font: ObjcId = msg_send![class!(NSFont), userFontOfSize:0.0];
-    font_info(font, "USR");
+    // let font: ObjcId = msg_send![class!(NSFont), systemFontOfSize:0.0];
+    // font_info(font, "SYS");
+    // let font: ObjcId = msg_send![class!(NSFont), userFontOfSize:0.0];
+    // font_info(font, "USR");
 
     let window_masks = NSWindowStyleMask::NSTitledWindowMask as u64
         | NSWindowStyleMask::NSClosableWindowMask as u64
