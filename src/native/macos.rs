@@ -34,6 +34,8 @@ pub struct MacosDisplay {
     modifiers: Modifiers,
     native_requests: Receiver<Request>,
     repainted: bool,
+    reshaped: bool,
+    skipping: bool,
 }
 
 impl MacosDisplay {
@@ -642,9 +644,10 @@ pub fn define_opengl_view_class() -> *const Class {
 
         let mut repaint = false;
         let repainted = payload.repainted;
+        let skipping = payload.skipping;
         if let Some(event_handler) = payload.context() {
             if repainted {
-                repaint = event_handler.update();
+                repaint = event_handler.update(skipping);
             }
         }
 
@@ -660,20 +663,25 @@ pub fn define_opengl_view_class() -> *const Class {
         unsafe {
             let superclass = superclass(this);
             let () = msg_send![super(this, superclass), reshape];
+
+            payload.skipping = !payload.reshaped;
             let () = msg_send![this, call_update];
 
+            payload.repainted = true;
+
             if let Some((w, h)) = payload.update_dimensions() {
+                payload.reshaped = true;
                 if let Some(event_handler) = payload.context() {
                     event_handler.resize_event(w as _, h as _);
                 }
+            } else {
+                payload.reshaped = false;
             }
         }
     }
 
     extern "C" fn draw_rect(this: &Object, _sel: Sel, _rect: NSRect) {
         let payload = get_window_payload(this);
-
-        // println!("draw_rect");
 
         if let Some(event_handler) = payload.context() {
             event_handler.draw();
@@ -720,9 +728,8 @@ pub fn define_opengl_view_class() -> *const Class {
     extern "C" fn timer_fired(this: &Object, _sel: Sel, _: ObjcId) {
         let payload = get_window_payload(this);
 
-        let repaint = unsafe {
-            msg_send![this, call_update]
-        };
+        payload.skipping = false;
+        let repaint = unsafe { msg_send![this, call_update] };
 
         if repaint {
             unsafe {
@@ -735,7 +742,10 @@ pub fn define_opengl_view_class() -> *const Class {
     let mut decl: ClassDecl = ClassDecl::new("RenderViewClass", superclass).unwrap();
     unsafe {
         //decl.add_method(sel!(dealloc), dealloc as extern "C" fn(&Object, Sel));
-        decl.add_method(sel!(call_update), call_update as extern "C" fn(&Object, Sel) -> bool);
+        decl.add_method(
+            sel!(call_update),
+            call_update as extern "C" fn(&Object, Sel) -> bool,
+        );
         decl.add_method(
             sel!(timerFired:),
             timer_fired as extern "C" fn(&Object, Sel, ObjcId),
@@ -777,8 +787,9 @@ pub fn define_metal_view_class() -> *const Class {
         }
 
         let mut repaint = false;
+        let repainted = payload.repainted;
         if let Some(event_handler) = payload.context() {
-            repaint = event_handler.update();
+            repaint = event_handler.update(repainted);
         }
         if (repaint) {
             unsafe {
@@ -962,6 +973,8 @@ where
         native_requests: rx,
         modifiers: Modifiers::default(),
         repainted: true,
+        reshaped: true,
+        skipping: false,
     };
 
     let app_delegate_class = define_app_delegate();
