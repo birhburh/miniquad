@@ -4,7 +4,7 @@
 //!
 use {
     crate::{
-        conf::AppleGfxApi,
+        conf::{AppleGfxApi, Icon},
         event::{EventHandler, MouseButton},
         native::{
             apple::{apple_util::*, frameworks::*},
@@ -947,6 +947,91 @@ unsafe fn font_info(font: ObjcId, label: &str) {
     println!("FONT FAMILY ATTR: {font_family_attr:?}");
 }
 
+// TODO: Move to frameworks.rs
+#[allow(non_upper_case_globals)]
+pub const kCGBitmapByteOrderDefault: u32 = (0 << 12);
+#[allow(non_upper_case_globals)]
+pub const kCGImageAlphaLast: u32 = 3;
+#[allow(non_upper_case_globals)]
+pub const kCGRenderingIntentDefault: u32 = 0;
+
+#[allow(improper_ctypes)]
+type DataReleaseCallback = unsafe extern "C" fn(info: *mut &[u8], data: *const c_void, size: usize);
+
+#[allow(improper_ctypes)]
+#[allow(non_upper_case_globals)]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGImageCreate(
+        width: usize,
+        height: usize,
+        bpc: usize,
+        bpp: usize,
+        bpr: usize,
+        colorspace: *const ObjcId,
+        bitmap_info: u32,
+        provider: *const ObjcId,
+        decode: *const c_void,
+        interpolate: bool,
+        intent: u32,
+    ) -> *const ObjcId;
+    fn CGDataProviderCreateWithData(
+        info: *mut &[u8],
+        data: *const u8,
+        size: usize,
+        callback: DataReleaseCallback,
+    ) -> *const ObjcId;
+    fn CGDataProviderRelease(provider: *const ObjcId);
+    fn CGImageRelease(image: *const ObjcId);
+    fn CGColorSpaceCreateDeviceRGB() -> *const ObjcId;
+    fn CGColorSpaceRelease(space: *const ObjcId);
+}
+
+unsafe extern "C" fn release_data(info: *mut &[u8], _: *const c_void, _: usize) {
+    Box::from_raw(info);
+}
+
+unsafe fn set_icon(ns_app: ObjcId, icon: &Icon) {
+    let width = 64 as usize;
+    let height = 64 as usize;
+    let colors = &icon.big[..];
+    let rgb = CGColorSpaceCreateDeviceRGB();
+    let bits_per_component: usize = 8; //number of bits in UInt8
+    let bits_per_pixel = 4 * bits_per_component; //ARGB uses 4 components
+    let bytes_per_row = width * 4; // bitsPerRow / 8 (in some cases, you need some paddings)
+
+    let data = colors.as_ptr();
+    let size = colors.len();
+    let boxed = Box::new(colors);
+    let info = Box::into_raw(boxed);
+    let provider = CGDataProviderCreateWithData(info, data, size, release_data);
+    let image = CGImageCreate(
+        width,
+        height,
+        bits_per_component,
+        bits_per_pixel,
+        bytes_per_row,
+        rgb,
+        kCGBitmapByteOrderDefault | kCGImageAlphaLast,
+        provider,
+        std::ptr::null(),
+        false,
+        kCGRenderingIntentDefault,
+    );
+
+    let size = NSSize {
+        width: width as f64,
+        height: height as f64,
+    };
+    let ns_image: ObjcId = msg_send![class!(NSImage), alloc];
+    let () = msg_send![ns_image, initWithCGImage: image size: size];
+
+    let () = msg_send![ns_app, setApplicationIconImage: ns_image];
+    CGDataProviderRelease(provider);
+    CGColorSpaceRelease(rgb);
+    CGImageRelease(image);
+}
+
 pub unsafe fn run<F>(conf: crate::conf::Conf, f: F)
 where
     F: 'static + FnOnce() -> Box<dyn EventHandler>,
@@ -988,6 +1073,10 @@ where
             as i64
     ];
     let () = msg_send![ns_app, activateIgnoringOtherApps: YES];
+
+    if let Some(icon) = &conf.icon {
+        set_icon(ns_app, icon);
+    }
 
     // let default_font_size: f64 = msg_send![class!(NSFont), systemFontSize];
     // dbg!(default_font_size);
