@@ -1086,10 +1086,12 @@ where
     // let font: ObjcId = msg_send![class!(NSFont), userFontOfSize:0.0];
     // font_info(font, "USR");
 
-    let window_masks = NSWindowStyleMask::NSTitledWindowMask as u64
+    let mut window_masks = NSWindowStyleMask::NSTitledWindowMask as u64
         | NSWindowStyleMask::NSClosableWindowMask as u64
-        | NSWindowStyleMask::NSMiniaturizableWindowMask as u64
-        | NSWindowStyleMask::NSResizableWindowMask as u64;
+        | NSWindowStyleMask::NSMiniaturizableWindowMask as u64;
+    if conf.window_resizable {
+        window_masks |= NSWindowStyleMask::NSResizableWindowMask as u64;
+    }
     //| NSWindowStyleMask::NSFullSizeContentViewWindowMask as u64;
 
     let window_frame = NSRect {
@@ -1155,6 +1157,24 @@ where
 
     if conf.fullscreen {
         let () = msg_send![window, toggleFullScreen: nil];
+    }
+
+    if conf.window_resizable {
+        let width = if let Some(min_width) = conf.min_width {
+            min_width
+        } else {
+            conf.window_width
+        };
+        let height = if let Some(min_height) = conf.min_height {
+            min_height
+        } else {
+            conf.window_height
+        };
+        let size = NSSize {
+            width: width as f64,
+            height: height as f64,
+        };
+        let () = msg_send![window, setMinSize: size];
     }
 
     let () = msg_send![window, makeKeyAndOrderFront: nil];

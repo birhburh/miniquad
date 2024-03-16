@@ -150,6 +150,13 @@ pub struct Conf {
     /// Determines if the application user can resize the window
     pub window_resizable: bool,
 
+    /// Minimal width if window is resizible, ignored on wasm/android.
+    /// if set to None and window is resizable - window_width used
+    pub min_width: Option<i32>,
+    /// Minimal height if window is resizible, ignored on wasm/android.
+    /// if set to None and window is resizable - window_height used
+    pub min_height: Option<i32>,
+
     /// Miniquad allows to change the window icon programmatically.
     /// The icon will be used as
     /// - taskbar and titlebar icons on Windows.
@@ -203,6 +210,8 @@ impl Default for Conf {
             fullscreen: false,
             sample_count: 1,
             window_resizable: true,
+            min_width: None,
+            min_height: None,
             icon: Some(Icon::miniquad_logo()),
             platform: Default::default(),
         }
@@ -220,6 +229,8 @@ impl Default for Conf {
             fullscreen: true,
             sample_count: 1,
             window_resizable: false,
+            min_width: None,
+            min_height: None,
             icon: Some(Icon::miniquad_logo()),
             platform: Default::default(),
         }
