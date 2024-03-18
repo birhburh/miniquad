@@ -256,7 +256,7 @@ impl MainThreadState {
     }
 
     fn frame(&mut self) {
-        let repaint = self.event_handler.update();
+        let repaint = self.event_handler.update(false);
 
         if self.surface.is_null() == false {
             if repaint {
