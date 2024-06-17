@@ -2,11 +2,11 @@
 
 use crate::native::module;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub type EGLNativeDisplayType = *mut crate::native::linux_x11::libx11::Display;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub type EGLNativePixmapType = crate::native::linux_x11::libx11::Pixmap;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub type EGLNativeWindowType = crate::native::linux_x11::libx11::Window;
 
 #[cfg(target_os = "android")]
