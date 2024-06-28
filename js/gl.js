@@ -99,7 +99,7 @@ canvas.focus();
 
 canvas.requestPointerLock = canvas.requestPointerLock ||
     canvas.mozRequestPointerLock ||
-    // pointer lock in any form is not supported on iOS safari 
+    // pointer lock in any form is not supported on iOS safari
     // https://developer.mozilla.org/en-US/docs/Web/API/Pointer_Lock_API#browser_compatibility
     (function () { });
 document.exitPointerLock = document.exitPointerLock ||
@@ -1234,7 +1234,8 @@ var importObject = {
             canvas.addEventListener("touchstart", function (event) {
                 event.preventDefault();
 
-                for (const touch of event.changedTouches) {
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    const touch = e.changedTouches[i];
                     let relative_position = mouse_relative_position(touch.clientX, touch.clientY);
                     wasm_exports.touch(SAPP_EVENTTYPE_TOUCHES_BEGAN, touch.identifier, relative_position.x, relative_position.y);
                 }
@@ -1242,7 +1243,8 @@ var importObject = {
             canvas.addEventListener("touchend", function (event) {
                 event.preventDefault();
 
-                for (const touch of event.changedTouches) {
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    const touch = e.changedTouches[i];
                     let relative_position = mouse_relative_position(touch.clientX, touch.clientY);
                     wasm_exports.touch(SAPP_EVENTTYPE_TOUCHES_ENDED, touch.identifier, relative_position.x, relative_position.y);
                 }
@@ -1250,7 +1252,8 @@ var importObject = {
             canvas.addEventListener("touchcancel", function (event) {
                 event.preventDefault();
 
-                for (const touch of event.changedTouches) {
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    const touch = e.changedTouches[i];
                     let relative_position = mouse_relative_position(touch.clientX, touch.clientY);
                     wasm_exports.touch(SAPP_EVENTTYPE_TOUCHES_CANCELED, touch.identifier, relative_position.x, relative_position.y);
                 }
@@ -1258,7 +1261,8 @@ var importObject = {
             canvas.addEventListener("touchmove", function (event) {
                 event.preventDefault();
 
-                for (const touch of event.changedTouches) {
+                for (let i = 0; i < e.changedTouches.length; i++) {
+                    const touch = e.changedTouches[i];
                     let relative_position = mouse_relative_position(touch.clientX, touch.clientY);
                     wasm_exports.touch(SAPP_EVENTTYPE_TOUCHES_MOVED, touch.identifier, relative_position.x, relative_position.y);
                 }
