@@ -5,31 +5,20 @@
 use {
     crate::{
         conf::{AppleGfxApi, Icon},
-        event::{EventHandler, KeyCode, KeyMods, MouseButton},
+        event::{EventHandler, MouseButton},
         native::{
             apple::{apple_util::*, frameworks::*},
             gl, NativeDisplayData, Request,
         },
         native_display, CursorIcon,
     },
-    std::{
-        cell::RefCell,
-        collections::HashMap,
-        os::raw::c_void,
-        sync::{mpsc, Arc, Mutex},
-        thread,
-    },
+    std::{collections::HashMap, os::raw::c_void, sync::mpsc::Receiver},
 };
-
-struct MainThreadState {
-    quit: bool,
-    view: *mut Object,
-    cur_msg: Message,
-}
 
 pub struct MacosDisplay {
     window: ObjcId,
     view: ObjcId,
+    gl_context: ObjcId,
     fullscreen: bool,
     // [NSCursor hide]/unhide calls should be balanced
     // hide/hide/unhide will keep cursor hidden
@@ -44,7 +33,7 @@ pub struct MacosDisplay {
     event_handler: Option<Box<dyn EventHandler>>,
     f: Option<Box<dyn 'static + FnOnce() -> Box<dyn EventHandler>>>,
     modifiers: Modifiers,
-    state: Arc<Mutex<MainThreadState>>,
+    native_requests: Receiver<Request>,
     update_requested: bool,
 }
 
@@ -164,10 +153,7 @@ impl MacosDisplay {
             let dpi_scale: f64 = msg_send![self.window, backingScaleFactor];
             d.dpi_scale = dpi_scale as f32;
         } else {
-            let bounds: NSRect = msg_send![self.view, bounds];
-            let backing_size: NSSize = msg_send![self.view, convertSizeToBacking: NSSize {width: bounds.size.width, height: bounds.size.height}];
-
-            d.dpi_scale = (backing_size.width / bounds.size.width) as f32;
+            d.dpi_scale = 1.0;
         }
 
         let bounds: NSRect = msg_send![self.view, bounds];
@@ -200,69 +186,12 @@ impl MacosDisplay {
                 new_height,
             } => self.set_window_size(new_width as _, new_height as _),
             SetFullscreen(fullscreen) => self.set_fullscreen(fullscreen),
-            SetWindowPosition { .. } => {
+            SetWindowPosition { new_x: _, new_y: _ } => {
                 eprintln!("Not implemented for macos");
             }
             _ => {}
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Message {
-    Resize {
-        width: i32,
-        height: i32,
-    },
-    RawMouseMove {
-        dx: f32,
-        dy: f32,
-    },
-    MouseMove {
-        x: f32,
-        y: f32,
-    },
-    MouseButtonDown {
-        button: MouseButton,
-        x: f32,
-        y: f32,
-    },
-    MouseButtonUp {
-        button: MouseButton,
-        x: f32,
-        y: f32,
-    },
-    MouseWheel {
-        dx: f32,
-        dy: f32,
-    },
-    Character {
-        character: char,
-        keymods: KeyMods,
-        repeat: bool,
-    },
-    KeyDown {
-        keycode: KeyCode,
-        keymods: KeyMods,
-        repeat: bool,
-    },
-    KeyUp {
-        keycode: KeyCode,
-        keymods: KeyMods,
-    },
-    Destroy,
-}
-unsafe impl Send for Message {}
-
-thread_local! {
-    static MESSAGES_TX: RefCell<Option<mpsc::Sender<Message>>> = RefCell::new(None);
-}
-
-fn send_message(message: Message) {
-    MESSAGES_TX.with(|tx| {
-        let mut tx = tx.borrow_mut();
-        tx.as_mut().unwrap().send(message).unwrap();
-    })
 }
 
 #[derive(Default)]
@@ -349,20 +278,18 @@ pub fn define_cocoa_window_delegate() -> *const Class {
     extern "C" fn window_did_resize(this: &Object, _: Sel, _: ObjcId) {
         let payload = get_window_payload(this);
         if let Some((w, h)) = unsafe { payload.update_dimensions() } {
-            send_message(Message::Resize {
-                width: w,
-                height: h,
-            });
+            if let Some(event_handler) = payload.context() {
+                event_handler.resize_event(w as _, h as _);
+            }
         }
     }
 
     extern "C" fn window_did_change_screen(this: &Object, _: Sel, _: ObjcId) {
         let payload = get_window_payload(this);
         if let Some((w, h)) = unsafe { payload.update_dimensions() } {
-            send_message(Message::Resize {
-                width: w,
-                height: h,
-            });
+            if let Some(event_handler) = payload.context() {
+                event_handler.resize_event(w as _, h as _);
+            }
         }
     }
     extern "C" fn window_did_enter_fullscreen(this: &Object, _: Sel, _: ObjcId) {
@@ -443,17 +370,15 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
             if payload.cursor_grabbed {
                 let dx: f64 = msg_send!(event, deltaX);
                 let dy: f64 = msg_send!(event, deltaY);
-                send_message(Message::RawMouseMove {
-                    dx: dx as f32,
-                    dy: dy as f32,
-                });
+                if let Some(event_handler) = payload.context() {
+                    event_handler.raw_mouse_motion(dx as f32, dy as f32);
+                }
             } else {
                 let point: NSPoint = msg_send!(event, locationInWindow);
                 let point = payload.transform_mouse_point(&point);
-                send_message(Message::MouseMove {
-                    x: point.0,
-                    y: point.1,
-                });
+                if let Some(event_handler) = payload.context() {
+                    event_handler.mouse_motion_event(point.0, point.1);
+                }
             }
         }
     }
@@ -464,18 +389,12 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
         unsafe {
             let point: NSPoint = msg_send!(event, locationInWindow);
             let point = payload.transform_mouse_point(&point);
-            if down {
-                send_message(Message::MouseButtonDown {
-                    button: btn,
-                    x: point.0,
-                    y: point.1,
-                });
-            } else {
-                send_message(Message::MouseButtonUp {
-                    button: btn,
-                    x: point.0,
-                    y: point.1,
-                });
+            if let Some(event_handler) = payload.context() {
+                if down {
+                    event_handler.mouse_button_down_event(btn, point.0, point.1);
+                } else {
+                    event_handler.mouse_button_up_event(btn, point.0, point.1);
+                }
             }
         }
     }
@@ -497,7 +416,8 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
     extern "C" fn other_mouse_up(this: &Object, _sel: Sel, event: ObjcId) {
         fire_mouse_event(this, event, false, MouseButton::Middle);
     }
-    extern "C" fn scroll_wheel(_: &Object, _sel: Sel, event: ObjcId) {
+    extern "C" fn scroll_wheel(this: &Object, _sel: Sel, event: ObjcId) {
+        let payload = get_window_payload(this);
         unsafe {
             let mut dx: f64 = msg_send![event, scrollingDeltaX];
             let mut dy: f64 = msg_send![event, scrollingDeltaY];
@@ -506,10 +426,9 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
                 dx *= 10.0;
                 dy *= 10.0;
             }
-            send_message(Message::MouseWheel {
-                dx: dx as f32,
-                dy: dy as f32,
-            });
+            if let Some(event_handler) = payload.context() {
+                event_handler.mouse_wheel_event(dx as f32, dy as f32);
+            }
         }
     }
     extern "C" fn reset_cursor_rects(this: &Object, _sel: Sel) {
@@ -535,38 +454,36 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
         }
     }
 
-    extern "C" fn key_down(_: &Object, _sel: Sel, event: ObjcId) {
+    extern "C" fn key_down(this: &Object, _sel: Sel, event: ObjcId) {
+        let payload = get_window_payload(this);
         let mods = get_event_key_modifier(event);
         let repeat: bool = unsafe { msg_send!(event, isARepeat) };
         if let Some(key) = get_event_keycode(event) {
-            send_message(Message::KeyDown {
-                keycode: key,
-                keymods: mods,
-                repeat,
-            });
+            if let Some(event_handler) = payload.context() {
+                event_handler.key_down_event(key, mods, repeat);
+            }
         }
 
         if let Some(character) = get_event_char(event) {
-            send_message(Message::Character {
-                character,
-                keymods: mods,
-                repeat,
-            });
+            if let Some(event_handler) = payload.context() {
+                event_handler.char_event(character, mods, repeat);
+            }
         }
     }
 
-    extern "C" fn key_up(_: &Object, _sel: Sel, event: ObjcId) {
+    extern "C" fn key_up(this: &Object, _sel: Sel, event: ObjcId) {
+        let payload = get_window_payload(this);
         let mods = get_event_key_modifier(event);
         if let Some(key) = get_event_keycode(event) {
-            send_message(Message::KeyUp {
-                keycode: key,
-                keymods: mods,
-            });
+            if let Some(event_handler) = payload.context() {
+                event_handler.key_up_event(key, mods);
+            }
         }
     }
 
     extern "C" fn flags_changed(this: &Object, _sel: Sel, event: ObjcId) {
         fn produce_event(
+            payload: &mut MacosDisplay,
             keycode: crate::KeyCode,
             mods: crate::KeyMods,
             old_pressed: bool,
@@ -574,16 +491,13 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
         ) {
             if new_pressed ^ old_pressed {
                 if new_pressed {
-                    send_message(Message::KeyDown {
-                        keycode,
-                        keymods: mods,
-                        repeat: false,
-                    });
+                    if let Some(event_handler) = payload.context() {
+                        event_handler.key_down_event(keycode, mods, false);
+                    }
                 } else {
-                    send_message(Message::KeyUp {
-                        keycode,
-                        keymods: mods,
-                    });
+                    if let Some(event_handler) = payload.context() {
+                        event_handler.key_up_event(keycode, mods);
+                    }
                 }
             }
         }
@@ -594,48 +508,56 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
         let new_modifiers = Modifiers::new(flags);
 
         produce_event(
+            payload,
             crate::KeyCode::LeftShift,
             mods,
             payload.modifiers.left_shift,
             new_modifiers.left_shift,
         );
         produce_event(
+            payload,
             crate::KeyCode::RightShift,
             mods,
             payload.modifiers.right_shift,
             new_modifiers.right_shift,
         );
         produce_event(
+            payload,
             crate::KeyCode::LeftControl,
             mods,
             payload.modifiers.left_control,
             new_modifiers.left_control,
         );
         produce_event(
+            payload,
             crate::KeyCode::RightControl,
             mods,
             payload.modifiers.right_control,
             new_modifiers.right_control,
         );
         produce_event(
+            payload,
             crate::KeyCode::LeftSuper,
             mods,
             payload.modifiers.left_command,
             new_modifiers.left_command,
         );
         produce_event(
+            payload,
             crate::KeyCode::RightSuper,
             mods,
             payload.modifiers.right_command,
             new_modifiers.right_command,
         );
         produce_event(
+            payload,
             crate::KeyCode::LeftAlt,
             mods,
             payload.modifiers.left_alt,
             new_modifiers.left_alt,
         );
         produce_event(
+            payload,
             crate::KeyCode::RightAlt,
             mods,
             payload.modifiers.right_alt,
@@ -644,87 +566,8 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
 
         payload.modifiers = new_modifiers;
     }
-
-    extern "C" fn process_message(this: &Object, _: Sel, _: ObjcId) {
-        use Message::*;
-        let payload = get_window_payload(this);
-        let msg = {
-            let state = payload.state.lock().unwrap();
-            state.cur_msg
-        };
-        match msg {
-            Destroy => {
-                let mut state = payload.state.lock().unwrap();
-                state.quit = true;
-            }
-            MouseMove { x, y } => {
-                if let Some(ref mut event_handler) = payload.event_handler {
-                    event_handler.mouse_motion_event(x, y);
-                }
-            }
-            RawMouseMove { dx, dy } => {
-                if let Some(ref mut event_handler) = payload.event_handler {
-                    event_handler.raw_mouse_motion(dx, dy);
-                }
-            }
-            MouseButtonDown { button, x, y } => {
-                if let Some(ref mut event_handler) = payload.event_handler {
-                    event_handler.mouse_button_down_event(button, x, y);
-                }
-            }
-            MouseButtonUp { button, x, y } => {
-                if let Some(ref mut event_handler) = payload.event_handler {
-                    event_handler.mouse_button_up_event(button, x, y);
-                }
-            }
-            MouseWheel { dx, dy } => {
-                if let Some(ref mut event_handler) = payload.event_handler {
-                    event_handler.mouse_wheel_event(dx as f32, dy as f32);
-                }
-            }
-            Character {
-                character,
-                keymods,
-                repeat,
-            } => {
-                if let Some(ref mut event_handler) = payload.event_handler {
-                    event_handler.char_event(character, keymods, repeat);
-                }
-            }
-            KeyDown {
-                keycode,
-                keymods,
-                repeat,
-            } => {
-                if let Some(ref mut event_handler) = payload.event_handler {
-                    event_handler.key_down_event(keycode, keymods, repeat);
-                }
-            }
-            KeyUp { keycode, keymods } => {
-                if let Some(ref mut event_handler) = payload.event_handler {
-                    event_handler.key_up_event(keycode, keymods);
-                }
-            }
-            Resize { width, height } => {
-                if let Some(ref mut event_handler) = payload.event_handler {
-                    event_handler.resize_event(width as _, height as _);
-                }
-            }
-        }
-    }
-
-    // apparently, its impossible to use performSelectorOnMainThread
-    // with primitive type argument, so the only way to pass
-    // YES to setNeedsDisplay - send a no argument message
-    // https://stackoverflow.com/questions/6120614/passing-primitives-through-performselectoronmainthread
-    extern "C" fn set_needs_display_hack(this: &Object, _: Sel) {
-        unsafe {
-            msg_send_![this, setNeedsDisplay: YES];
-        }
-    }
-
     decl.add_method(
-        sel!(canBecomeKey),
+        sel!(canBecomeKeyView),
         yes as extern "C" fn(&Object, Sel) -> BOOL,
     );
     decl.add_method(
@@ -789,14 +632,6 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
         flags_changed as extern "C" fn(&Object, Sel, ObjcId),
     );
     decl.add_method(sel!(keyUp:), key_up as extern "C" fn(&Object, Sel, ObjcId));
-    decl.add_method(
-        sel!(processMessage:),
-        process_message as extern "C" fn(&Object, Sel, ObjcId),
-    );
-    decl.add_method(
-        sel!(setNeedsDisplayHack),
-        set_needs_display_hack as extern "C" fn(&Object, Sel),
-    );
 }
 
 pub fn define_opengl_view_class() -> *const Class {
@@ -804,85 +639,38 @@ pub fn define_opengl_view_class() -> *const Class {
 
     extern "C" fn reshape(this: &Object, _sel: Sel) {
         let payload = get_window_payload(this);
-
         unsafe {
-            let superclass = superclass(this);
-            let () = msg_send![super(this, superclass), reshape];
-
             if let Some((w, h)) = payload.update_dimensions() {
-                // left this because post_processing.rs turns black after the first resize
-                // and somehow this makes it draw until manual window resize
-                // (bug existed even on original macos implementation)
-
-                // send_message(Message::Resize { width: w, height: h });
-                if let Some(ref mut event_handler) = payload.event_handler {
+                if let Some(event_handler) = payload.context() {
                     event_handler.resize_event(w as _, h as _);
                 }
             }
         }
     }
 
-    extern "C" fn draw_rect(this: &Object, _sel: Sel, _rect: NSRect) {
-        let payload = get_window_payload(this);
-        let mut updated = false;
-
-        if let Some(event_handler) = payload.context() {
-            event_handler.update();
-            event_handler.draw();
-            updated = true;
-        }
-        if updated {
-            payload.update_requested = false;
-        }
-
-        unsafe {
-            let ctx: ObjcId = msg_send![this, openGLContext];
-            assert!(!ctx.is_null());
-            let () = msg_send![ctx, flushBuffer];
-
-            let d = native_display().lock().unwrap();
-            if d.quit_requested || d.quit_ordered {
-                drop(d);
-                let () = msg_send![payload.window, performClose: nil];
-            }
-        }
+    extern "C" fn draw_rect(_this: &Object, _sel: Sel, rect: NSRect) {
+        println!("draw_rect: {:?}", rect);
     }
 
-    extern "C" fn prepare_open_gl(this: &Object, _sel: Sel) {
-        let payload = get_window_payload(this);
-        unsafe {
-            let superclass = superclass(this);
-            let () = msg_send![super(this, superclass), prepareOpenGL];
-            let mut swap_interval = 1;
-            let ctx: ObjcId = msg_send![this, openGLContext];
-            let () = msg_send![ctx,
-                               setValues:&mut swap_interval
-                               forParameter:NSOpenGLContextParameterSwapInterval];
-            let () = msg_send![ctx, makeCurrentContext];
-        }
-
-        gl::load_gl_funcs(|proc| {
-            let name = std::ffi::CString::new(proc).unwrap();
-
-            unsafe { get_proc_address(name.as_ptr() as _) }
-        });
-
-        let f = payload.f.take().unwrap();
-        payload.event_handler = Some(f());
+    extern "C" fn update_layer(_this: &Object, _sel: Sel) {
+        println!("update_layer");
     }
 
-    let superclass = class!(NSOpenGLView);
+    let superclass = class!(NSView);
     let mut decl: ClassDecl = ClassDecl::new("RenderViewClass", superclass).unwrap();
     unsafe {
-        //decl.add_method(sel!(dealloc), dealloc as extern "C" fn(&Object, Sel));
-        decl.add_method(
-            sel!(prepareOpenGL),
-            prepare_open_gl as extern "C" fn(&Object, Sel),
-        );
-        decl.add_method(sel!(reshape), reshape as extern "C" fn(&Object, Sel));
+        // decl.add_method(sel!(reshape), reshape as extern "C" fn(&Object, Sel));
         decl.add_method(
             sel!(drawRect:),
             draw_rect as extern "C" fn(&Object, Sel, NSRect),
+        );
+        decl.add_method(
+            sel!(wantsUpdateLayer),
+            yes as extern "C" fn(&Object, Sel) -> BOOL,
+        );
+        decl.add_method(
+            sel!(updateLayer),
+            update_layer as extern "C" fn(&Object, Sel),
         );
 
         view_base_decl(&mut decl);
@@ -965,47 +753,10 @@ unsafe fn create_metal_view(_: NSRect, sample_count: i32, _: bool) -> ObjcId {
     view
 }
 
-unsafe fn create_opengl_view(window_frame: NSRect, sample_count: i32, high_dpi: bool) -> ObjcId {
-    use NSOpenGLPixelFormatAttribute::*;
-
-    let mut attrs: Vec<u32> = vec![];
-
-    attrs.push(NSOpenGLPFAAccelerated as _);
-    attrs.push(NSOpenGLPFADoubleBuffer as _);
-    attrs.push(NSOpenGLPFAOpenGLProfile as _);
-    attrs.push(NSOpenGLPFAOpenGLProfiles::NSOpenGLProfileVersion3_2Core as _);
-    attrs.push(NSOpenGLPFAColorSize as _);
-    attrs.push(24);
-    attrs.push(NSOpenGLPFAAlphaSize as _);
-    attrs.push(8);
-    attrs.push(NSOpenGLPFADepthSize as _);
-    attrs.push(24);
-    attrs.push(NSOpenGLPFAStencilSize as _);
-    attrs.push(8);
-    if sample_count > 1 {
-        attrs.push(NSOpenGLPFAMultisample as _);
-        attrs.push(NSOpenGLPFASampleBuffers as _);
-        attrs.push(1 as _);
-        attrs.push(NSOpenGLPFASamples as _);
-        attrs.push(sample_count as _);
-    } else {
-        attrs.push(NSOpenGLPFASampleBuffers as _);
-        attrs.push(0);
-    }
-    attrs.push(0);
-
-    let glpixelformat_obj: ObjcId = msg_send![class!(NSOpenGLPixelFormat), alloc];
-    let glpixelformat_obj: ObjcId =
-        msg_send![glpixelformat_obj, initWithAttributes: attrs.as_ptr()];
-    assert!(!glpixelformat_obj.is_null());
-
+unsafe fn create_opengl_view(_window_frame: NSRect, _sample_count: i32, high_dpi: bool) -> ObjcId {
     let view_class = define_opengl_view_class();
     let view: ObjcId = msg_send![view_class, alloc];
-    let view: ObjcId = msg_send![
-        view,
-        initWithFrame: window_frame
-        pixelFormat: glpixelformat_obj
-    ];
+    let view: ObjcId = msg_send![view, init];
 
     if high_dpi {
         let () = msg_send![view, setWantsBestResolutionOpenGLSurface: YES];
@@ -1091,7 +842,8 @@ unsafe fn initialize_menu_bar(ns_app: ObjcId) {
     //  the Application bundle files, ending with the executable name.
     let running_application = msg_send_![class!(NSRunningApplication), currentApplication];
     let application_name = msg_send_![running_application, localizedName];
-    let quit_item_title = str_to_nsstring(&format!("Quit {}", nsstring_to_string(application_name)));
+    let quit_item_title =
+        str_to_nsstring(&format!("Quit {}", nsstring_to_string(application_name)));
     let quit_item = msg_send_![class!(NSMenuItem), alloc];
     let quit_item = msg_send_![
         quit_item,
@@ -1106,7 +858,7 @@ pub unsafe fn run<F>(conf: crate::conf::Conf, f: F)
 where
     F: 'static + FnOnce() -> Box<dyn EventHandler>,
 {
-    let (tx, requests_rx) = std::sync::mpsc::channel();
+    let (tx, rx) = std::sync::mpsc::channel();
     let clipboard = Box::new(MacosClipboard);
     crate::set_display(NativeDisplayData {
         high_dpi: conf.high_dpi,
@@ -1115,19 +867,10 @@ where
         ..NativeDisplayData::new(conf.window_width, conf.window_height, tx, clipboard)
     });
 
-    let (tx, rx) = std::sync::mpsc::channel();
-
-    MESSAGES_TX.with(move |messages_tx| *messages_tx.borrow_mut() = Some(tx));
-
-    let state_original = Arc::new(Mutex::new(MainThreadState {
-        quit: false,
-        view: std::ptr::null_mut(),
-        cur_msg: Message::MouseMove { x: 0., y: 0. },
-    }));
-
     let mut display = MacosDisplay {
         view: std::ptr::null_mut(),
         window: std::ptr::null_mut(),
+        gl_context: std::ptr::null_mut(),
         fullscreen: false,
         cursor_shown: true,
         current_cursor: CursorIcon::Default,
@@ -1136,9 +879,9 @@ where
         gfx_api: conf.platform.apple_gfx_api,
         f: Some(Box::new(f)),
         event_handler: None,
+        native_requests: rx,
         modifiers: Modifiers::default(),
         update_requested: true,
-        state: state_original.clone(),
     };
 
     let app_delegate_class = define_app_delegate();
@@ -1203,14 +946,65 @@ where
         let mut d = native_display().lock().unwrap();
         d.view = view;
     }
-    {
-        let mut s = state_original.lock().unwrap();
-        s.view = view;
-    }
     (*view).set_ivar("display_ptr", &mut display as *mut _ as *mut c_void);
 
     display.window = window;
     display.view = view;
+
+    use NSOpenGLPixelFormatAttribute::*;
+
+    let mut attrs: Vec<u32> = vec![];
+
+    // attrs.push(NSOpenGLPFAAccelerated as _);
+    // attrs.push(NSOpenGLPFAClosestPolicy as _);
+    attrs.push(NSOpenGLPFADoubleBuffer as _);
+    attrs.push(NSOpenGLPFAOpenGLProfile as _);
+    attrs.push(NSOpenGLPFAOpenGLProfiles::NSOpenGLProfileVersion3_2Core as _);
+    // attrs.push(NSOpenGLPFAColorSize as _);
+    // attrs.push(24);
+    // attrs.push(NSOpenGLPFAAlphaSize as _);
+    // attrs.push(8);
+    // attrs.push(NSOpenGLPFADepthSize as _);
+    // attrs.push(24);
+    // attrs.push(NSOpenGLPFAStencilSize as _);
+    // attrs.push(8);
+    // if conf.sample_count > 1 {
+    //     attrs.push(NSOpenGLPFAMultisample as _);
+    //     attrs.push(NSOpenGLPFASampleBuffers as _);
+    //     attrs.push(1 as _);
+    //     attrs.push(NSOpenGLPFASamples as _);
+    //     attrs.push(conf.sample_count as _);
+    // } else {
+    //     attrs.push(NSOpenGLPFASampleBuffers as _);
+    //     attrs.push(0);
+    // }
+    attrs.push(0);
+
+    let glpixelformat_obj = msg_send_![class!(NSOpenGLPixelFormat), alloc];
+    let glpixelformat_obj = msg_send_![glpixelformat_obj, initWithAttributes: attrs.as_ptr()];
+    assert!(!glpixelformat_obj.is_null());
+
+    let gl_context = msg_send_![class!(NSOpenGLContext), alloc];
+    display.gl_context = msg_send![gl_context, initWithFormat: glpixelformat_obj shareContext: nil];
+    msg_send_![display.gl_context, makeCurrentContext];
+
+    gl::load_gl_funcs(|proc| {
+        let name = std::ffi::CString::new(proc).unwrap();
+
+        unsafe { get_proc_address(name.as_ptr() as _) }
+    });
+
+    unsafe {
+        let mut swap_interval = 1;
+        let () = msg_send![display.gl_context,
+                            setValues:&mut swap_interval
+                            forParameter:NSOpenGLContextParameterSwapInterval];
+    }
+
+    let f = display.f.take().unwrap();
+    display.event_handler = Some(f());
+
+    msg_send_![display.gl_context, setView:view];
 
     let () = msg_send![window, setContentView: view];
 
@@ -1226,76 +1020,68 @@ where
 
     let () = msg_send![window, makeKeyAndOrderFront: nil];
 
-    struct SendHack<F>(F);
-    unsafe impl<F> Send for SendHack<F> {}
+    let ns_app: ObjcId = msg_send![class!(NSApplication), sharedApplication];
 
-    let state = SendHack(state_original.clone());
-    thread::spawn(move || {
-        let s = state.0;
+    // Basically reimplementing msg_send![ns_app, run] here
+    let () = msg_send![ns_app, finishLaunching];
 
-        loop {
-            while let Ok(request) = requests_rx.try_recv() {
-                let s = s.lock().unwrap();
-                let view = s.view;
-                let payload = get_window_payload(view.as_ref().unwrap());
-                payload.process_request(request);
-            }
-
-            let block_on_wait = {
-                let s = s.lock().unwrap();
-                let view = s.view;
-
-                let payload = get_window_payload(view.as_ref().unwrap());
-                conf.platform.blocking_event_loop && !payload.update_requested
-            };
-
-            if block_on_wait {
-                let res = rx.recv();
-
-                if let Ok(msg) = res {
-                    let view;
-                    {
-                        let mut s = s.lock().unwrap();
-                        view = s.view;
-                        s.cur_msg = msg;
-                    }
-                    msg_send_![&*view, performSelectorOnMainThread:sel!(processMessage:) withObject:nil waitUntilDone:YES];
-                }
-            } else {
-                // process all the messages from the main thread
-                while let Ok(msg) = rx.try_recv() {
-                    let view;
-                    {
-                        let mut s = s.lock().unwrap();
-                        view = s.view;
-                        s.cur_msg = msg;
-                    }
-                    msg_send_![&*view, performSelectorOnMainThread:sel!(processMessage:) withObject:nil waitUntilDone:YES];
-                }
-            }
-
-            let update_requested;
-            let view;
-            {
-                let s = s.lock().unwrap();
-                view = s.view;
-
-                let payload = get_window_payload(view.as_ref().unwrap());
-                update_requested = payload.update_requested;
-            }
-
-            if !conf.platform.blocking_event_loop || update_requested {
-                unsafe {
-                    msg_send_![view, performSelectorOnMainThread:sel!(setNeedsDisplayHack) withObject:nil waitUntilDone:NO];
-                }
-            }
-            thread::yield_now();
+    let distant_future: ObjcId = msg_send![class!(NSDate), distantFuture];
+    let distant_past: ObjcId = msg_send![class!(NSDate), distantPast];
+    let mut done = false;
+    while !(done || crate::native_display().lock().unwrap().quit_ordered) {
+        while let Ok(request) = display.native_requests.try_recv() {
+            display.process_request(request);
         }
-    });
 
-    let () = msg_send![ns_app, run];
+        {
+            let d = native_display().lock().unwrap();
+            if d.quit_requested || d.quit_ordered {
+                done = true;
+            }
+        }
 
-    // run should never return
-    // but just in case
-    unreachable!();
+        let block_on_wait = conf.platform.blocking_event_loop && !display.update_requested;
+        if block_on_wait {
+            let event: ObjcId = msg_send![ns_app, nextEventMatchingMask: NSEventMask::NSAnyEventMask untilDate: distant_future inMode:NSDefaultRunLoopMode dequeue:YES];
+
+            let () = msg_send![ns_app, sendEvent:event];
+        } else {
+            loop {
+                let event: ObjcId = msg_send![ns_app, nextEventMatchingMask: NSEventMask::NSAnyEventMask untilDate: distant_past inMode:NSDefaultRunLoopMode dequeue:YES];
+                if event == nil {
+                    break;
+                }
+                let () = msg_send![ns_app, sendEvent:event];
+            }
+        }
+
+        if !conf.platform.blocking_event_loop || display.update_requested {
+            if display.event_handler.is_none() {
+                let f = display.f.take().unwrap();
+                display.event_handler = Some(f());
+            }
+
+            let mut updated = false;
+
+            if let Some(event_handler) = display.context() {
+                event_handler.update();
+                event_handler.draw();
+                updated = true;
+            }
+            if updated {
+                display.update_requested = false;
+            }
+
+            {
+                let d = native_display().lock().unwrap();
+                if d.quit_requested || d.quit_ordered {
+                    drop(d);
+                    let () = msg_send![display.window, performClose: nil];
+                }
+            }
+            unsafe {
+                let () = msg_send!(gl_context, flushBuffer);
+            }
+        }
+    }
 }
