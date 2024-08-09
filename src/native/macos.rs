@@ -567,7 +567,7 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
         payload.modifiers = new_modifiers;
     }
     decl.add_method(
-        sel!(canBecomeKeyView),
+        sel!(canBecomeKey),
         yes as extern "C" fn(&Object, Sel) -> BOOL,
     );
     decl.add_method(
@@ -639,7 +639,11 @@ pub fn define_opengl_view_class() -> *const Class {
 
     extern "C" fn reshape(this: &Object, _sel: Sel) {
         let payload = get_window_payload(this);
+
         unsafe {
+            let superclass = superclass(this);
+            let () = msg_send![super(this, superclass), reshape];
+
             if let Some((w, h)) = payload.update_dimensions() {
                 if let Some(event_handler) = payload.context() {
                     event_handler.resize_event(w as _, h as _);
@@ -648,30 +652,75 @@ pub fn define_opengl_view_class() -> *const Class {
         }
     }
 
-    extern "C" fn draw_rect(_this: &Object, _sel: Sel, rect: NSRect) {
-        println!("draw_rect: {:?}", rect);
-    }
+    extern "C" fn init_open_gl(this: &Object, _sel: Sel, sample_count: i32) {
+        let payload = get_window_payload(this);
 
-    extern "C" fn update_layer(_this: &Object, _sel: Sel) {
-        println!("update_layer");
+        unsafe {
+            use NSOpenGLPixelFormatAttribute::*;
+
+            let mut attrs: Vec<u32> = vec![];
+
+            // attrs.push(NSOpenGLPFAAccelerated as _);
+            attrs.push(NSOpenGLPFADoubleBuffer as _);
+            attrs.push(NSOpenGLPFAOpenGLProfile as _);
+            attrs.push(NSOpenGLPFAOpenGLProfiles::NSOpenGLProfileVersion3_2Core as _);
+            attrs.push(NSOpenGLPFAColorSize as _);
+            attrs.push(24);
+            attrs.push(NSOpenGLPFAAlphaSize as _);
+            attrs.push(8);
+            attrs.push(NSOpenGLPFADepthSize as _);
+            attrs.push(24);
+            attrs.push(NSOpenGLPFAStencilSize as _);
+            attrs.push(8);
+            if sample_count > 1 {
+                attrs.push(NSOpenGLPFAMultisample as _);
+                attrs.push(NSOpenGLPFASampleBuffers as _);
+                attrs.push(1 as _);
+                attrs.push(NSOpenGLPFASamples as _);
+                attrs.push(sample_count as _);
+            } else {
+                attrs.push(NSOpenGLPFASampleBuffers as _);
+                attrs.push(0);
+            }
+            attrs.push(0);
+
+            let glpixelformat_obj = msg_send_![class!(NSOpenGLPixelFormat), alloc];
+            let glpixelformat_obj =
+                msg_send_![glpixelformat_obj, initWithAttributes: attrs.as_ptr()];
+            assert!(!glpixelformat_obj.is_null());
+
+            let gl_context = msg_send_![class!(NSOpenGLContext), alloc];
+            payload.gl_context =
+                msg_send![gl_context, initWithFormat: glpixelformat_obj shareContext: nil];
+
+            unsafe {
+                let mut swap_interval = 1;
+                let () = msg_send![payload.gl_context,
+                            setValues:&mut swap_interval
+                            forParameter:NSOpenGLContextParameterSwapInterval];
+            }
+
+            msg_send_![payload.gl_context, setView:this];
+
+            msg_send_![payload.gl_context, makeCurrentContext];
+
+            gl::load_gl_funcs(|proc| {
+                let name = std::ffi::CString::new(proc).unwrap();
+
+                unsafe { get_proc_address(name.as_ptr() as _) }
+            });
+        }
     }
 
     let superclass = class!(NSView);
     let mut decl: ClassDecl = ClassDecl::new("RenderViewClass", superclass).unwrap();
     unsafe {
+        decl.add_method(
+            sel!(initOpenGL:),
+            init_open_gl as extern "C" fn(&Object, Sel, i32),
+        );
+        //decl.add_method(sel!(dealloc), dealloc as extern "C" fn(&Object, Sel));
         // decl.add_method(sel!(reshape), reshape as extern "C" fn(&Object, Sel));
-        decl.add_method(
-            sel!(drawRect:),
-            draw_rect as extern "C" fn(&Object, Sel, NSRect),
-        );
-        decl.add_method(
-            sel!(wantsUpdateLayer),
-            yes as extern "C" fn(&Object, Sel) -> BOOL,
-        );
-        decl.add_method(
-            sel!(updateLayer),
-            update_layer as extern "C" fn(&Object, Sel),
-        );
 
         view_base_decl(&mut decl);
     }
@@ -687,31 +736,6 @@ pub fn define_metal_view_class() -> *const Class {
     decl.add_ivar::<*mut c_void>("display_ptr");
 
     extern "C" fn draw_rect(this: &Object, _sel: Sel, _rect: NSRect) {
-        let payload = get_window_payload(this);
-
-        if payload.event_handler.is_none() {
-            let f = payload.f.take().unwrap();
-            payload.event_handler = Some(f());
-        }
-
-        let mut updated = false;
-
-        if let Some(event_handler) = payload.context() {
-            event_handler.update();
-            event_handler.draw();
-            updated = true;
-        }
-        if updated {
-            payload.update_requested = false;
-        }
-
-        unsafe {
-            let d = native_display().lock().unwrap();
-            if d.quit_requested || d.quit_ordered {
-                drop(d);
-                let () = msg_send![payload.window, performClose: nil];
-            }
-        }
     }
 
     unsafe {
@@ -753,7 +777,7 @@ unsafe fn create_metal_view(_: NSRect, sample_count: i32, _: bool) -> ObjcId {
     view
 }
 
-unsafe fn create_opengl_view(_window_frame: NSRect, _sample_count: i32, high_dpi: bool) -> ObjcId {
+unsafe fn create_opengl_view(window_frame: NSRect, sample_count: i32, high_dpi: bool) -> ObjcId {
     let view_class = define_opengl_view_class();
     let view: ObjcId = msg_send![view_class, alloc];
     let view: ObjcId = msg_send![view, init];
@@ -894,7 +918,6 @@ where
         setActivationPolicy: NSApplicationActivationPolicy::NSApplicationActivationPolicyRegular
             as i64
     ];
-    let () = msg_send![ns_app, activateIgnoringOtherApps: YES];
 
     if let Some(icon) = &conf.icon {
         set_icon(ns_app, icon);
@@ -951,62 +974,11 @@ where
     display.window = window;
     display.view = view;
 
-    use NSOpenGLPixelFormatAttribute::*;
-
-    let mut attrs: Vec<u32> = vec![];
-
-    // attrs.push(NSOpenGLPFAAccelerated as _);
-    // attrs.push(NSOpenGLPFAClosestPolicy as _);
-    attrs.push(NSOpenGLPFADoubleBuffer as _);
-    attrs.push(NSOpenGLPFAOpenGLProfile as _);
-    attrs.push(NSOpenGLPFAOpenGLProfiles::NSOpenGLProfileVersion3_2Core as _);
-    // attrs.push(NSOpenGLPFAColorSize as _);
-    // attrs.push(24);
-    // attrs.push(NSOpenGLPFAAlphaSize as _);
-    // attrs.push(8);
-    // attrs.push(NSOpenGLPFADepthSize as _);
-    // attrs.push(24);
-    // attrs.push(NSOpenGLPFAStencilSize as _);
-    // attrs.push(8);
-    // if conf.sample_count > 1 {
-    //     attrs.push(NSOpenGLPFAMultisample as _);
-    //     attrs.push(NSOpenGLPFASampleBuffers as _);
-    //     attrs.push(1 as _);
-    //     attrs.push(NSOpenGLPFASamples as _);
-    //     attrs.push(conf.sample_count as _);
-    // } else {
-    //     attrs.push(NSOpenGLPFASampleBuffers as _);
-    //     attrs.push(0);
-    // }
-    attrs.push(0);
-
-    let glpixelformat_obj = msg_send_![class!(NSOpenGLPixelFormat), alloc];
-    let glpixelformat_obj = msg_send_![glpixelformat_obj, initWithAttributes: attrs.as_ptr()];
-    assert!(!glpixelformat_obj.is_null());
-
-    let gl_context = msg_send_![class!(NSOpenGLContext), alloc];
-    display.gl_context = msg_send![gl_context, initWithFormat: glpixelformat_obj shareContext: nil];
-    msg_send_![display.gl_context, makeCurrentContext];
-
-    gl::load_gl_funcs(|proc| {
-        let name = std::ffi::CString::new(proc).unwrap();
-
-        unsafe { get_proc_address(name.as_ptr() as _) }
-    });
-
-    unsafe {
-        let mut swap_interval = 1;
-        let () = msg_send![display.gl_context,
-                            setValues:&mut swap_interval
-                            forParameter:NSOpenGLContextParameterSwapInterval];
-    }
-
-    let f = display.f.take().unwrap();
-    display.event_handler = Some(f());
-
-    msg_send_![display.gl_context, setView:view];
-
     let () = msg_send![window, setContentView: view];
+
+    if let AppleGfxApi::OpenGl = conf.platform.apple_gfx_api {
+        msg_send_!(view, initOpenGL:conf.sample_count);
+    };
 
     let _ = display.update_dimensions();
 
@@ -1018,9 +990,9 @@ where
         let () = msg_send![window, toggleFullScreen: nil];
     }
 
+    msg_send_![window, orderFront: nil];
+    let () = msg_send![ns_app, activateIgnoringOtherApps: YES];
     let () = msg_send![window, makeKeyAndOrderFront: nil];
-
-    let ns_app: ObjcId = msg_send![class!(NSApplication), sharedApplication];
 
     // Basically reimplementing msg_send![ns_app, run] here
     let () = msg_send![ns_app, finishLaunching];
@@ -1080,7 +1052,10 @@ where
                 }
             }
             unsafe {
-                let () = msg_send!(gl_context, flushBuffer);
+                let view = match conf.platform.apple_gfx_api {
+                    AppleGfxApi::OpenGl => msg_send_!(display.gl_context, flushBuffer),
+                    AppleGfxApi::Metal => msg_send_!(view, setNeedsDisplay: YES),
+                };
             }
         }
     }
