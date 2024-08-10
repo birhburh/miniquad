@@ -12,7 +12,12 @@ use {
         },
         native_display, CursorIcon,
     },
-    std::{collections::HashMap, os::raw::c_void, sync::mpsc::Receiver},
+    std::{
+        collections::HashMap,
+        os::raw::c_void,
+        sync::mpsc::Receiver,
+        time::{Duration, Instant},
+    },
 };
 
 pub struct MacosDisplay {
@@ -20,6 +25,7 @@ pub struct MacosDisplay {
     view: ObjcId,
     gl_context: ObjcId,
     fullscreen: bool,
+    occluded: bool,
     // [NSCursor hide]/unhide calls should be balanced
     // hide/hide/unhide will keep cursor hidden
     // so need to keep internal cursor state to avoid problems from
@@ -35,6 +41,8 @@ pub struct MacosDisplay {
     modifiers: Modifiers,
     native_requests: Receiver<Request>,
     update_requested: bool,
+    // Set to 10 seconds in the past so we'll definitely immediately paint the first frame.
+    last_paint_start_time: Instant,
 }
 
 impl MacosDisplay {
@@ -149,6 +157,11 @@ impl MacosDisplay {
 
     unsafe fn update_dimensions(&mut self) -> Option<(i32, i32)> {
         let mut d = native_display().lock().unwrap();
+        unsafe {
+            if self.gl_context != nil {
+                msg_send_![self.gl_context, update];
+            }
+        }
         if d.high_dpi {
             let dpi_scale: f64 = msg_send![self.window, backingScaleFactor];
             d.dpi_scale = dpi_scale as f32;
@@ -158,6 +171,7 @@ impl MacosDisplay {
 
             let content_rect: NSRect = msg_send![self.window, frame];
             let fb_rect: NSRect = msg_send![self.view, convertRectToBacking:content_rect];
+            let dpi_scale: f64 = msg_send![self.window, backingScaleFactor];
             dbg!(content_rect);
             dbg!(fb_rect);
             dbg!(bounds);
@@ -289,9 +303,6 @@ pub fn define_cocoa_window_delegate() -> *const Class {
 
     extern "C" fn window_did_resize(this: &Object, _: Sel, _: ObjcId) {
         let payload = get_window_payload(this);
-        unsafe {
-            msg_send_![payload.gl_context, update];
-        }
         if let Some((w, h)) = unsafe { payload.update_dimensions() } {
             if let Some(event_handler) = payload.context() {
                 event_handler.resize_event(w as _, h as _);
@@ -322,6 +333,23 @@ pub fn define_cocoa_window_delegate() -> *const Class {
         let payload = get_window_payload(this);
         payload.fullscreen = false;
     }
+    extern "C" fn window_did_change_occlusion_state(this: &Object, _: Sel, _: ObjcId) {
+        unsafe {
+            let payload = get_window_payload(this);
+            let responds: bool = msg_send![payload.window, respondsToSelector:sel!(occlusionState)];
+            if responds {
+                const NSWindowOcclusionStateVisible: u64 = 1 << 1;
+                let state: u64 = msg_send![payload.window, occlusionState];
+                if state & NSWindowOcclusionStateVisible != 0 {
+                    payload.occluded = false;
+                } else {
+                    payload.occluded = true;
+                }
+                dbg!(payload.occluded);
+            }
+        }
+    }
+
     let superclass = class!(NSObject);
     let mut decl = ClassDecl::new("RenderWindowDelegate", superclass).unwrap();
 
@@ -351,6 +379,10 @@ pub fn define_cocoa_window_delegate() -> *const Class {
         decl.add_method(
             sel!(windowDidExitFullScreen:),
             window_did_exit_fullscreen as extern "C" fn(&Object, Sel, ObjcId),
+        );
+        decl.add_method(
+            sel!(windowDidChangeOcclusionState:),
+            window_did_change_occlusion_state as extern "C" fn(&Object, Sel, ObjcId),
         );
     }
     // Store internal state as user data
@@ -667,8 +699,6 @@ pub fn define_opengl_view_class() -> *const Class {
         println!("RESHAPE");
         let payload = get_window_payload(this);
         unsafe {
-            msg_send_![payload.gl_context, update];
-
             if let Some((w, h)) = payload.update_dimensions() {
                 if let Some(event_handler) = payload.context() {
                     event_handler.resize_event(w as _, h as _);
@@ -718,12 +748,10 @@ pub fn define_opengl_view_class() -> *const Class {
             payload.gl_context =
                 msg_send![gl_context, initWithFormat: glpixelformat_obj shareContext: nil];
 
-            unsafe {
-                let mut swap_interval = 1;
-                let () = msg_send![payload.gl_context,
-                            setValues:&mut swap_interval
-                            forParameter:NSOpenGLContextParameterSwapInterval];
-            }
+            let mut swap_interval = 1;
+            let () = msg_send![payload.gl_context,
+                        setValues:&mut swap_interval
+                        forParameter:NSOpenGLContextParameterSwapInterval];
 
             msg_send_![payload.gl_context, setView:this];
 
@@ -732,7 +760,7 @@ pub fn define_opengl_view_class() -> *const Class {
             gl::load_gl_funcs(|proc| {
                 let name = std::ffi::CString::new(proc).unwrap();
 
-                unsafe { get_proc_address(name.as_ptr() as _) }
+                get_proc_address(name.as_ptr() as _)
             });
         }
     }
@@ -774,16 +802,7 @@ pub fn define_metal_view_class() -> *const Class {
     let mut decl = ClassDecl::new("RenderViewClass", superclass).unwrap();
     decl.add_ivar::<*mut c_void>("display_ptr");
 
-    extern "C" fn draw_rect(this: &Object, _sel: Sel, _rect: NSRect) {
-    }
-
     unsafe {
-        //decl.add_method(sel!(dealloc), dealloc as extern "C" fn(&Object, Sel));
-        decl.add_method(
-            sel!(drawRect:),
-            draw_rect as extern "C" fn(&Object, Sel, NSRect),
-        );
-
         view_base_decl(&mut decl);
     }
 
@@ -937,6 +956,7 @@ where
         window: std::ptr::null_mut(),
         gl_context: std::ptr::null_mut(),
         fullscreen: false,
+        occluded: false,
         cursor_shown: true,
         current_cursor: CursorIcon::Default,
         cursor_grabbed: false,
@@ -947,6 +967,7 @@ where
         native_requests: rx,
         modifiers: Modifiers::default(),
         update_requested: true,
+        last_paint_start_time: Instant::now() - Duration::from_secs(10),
     };
 
     let app_delegate_class = define_app_delegate();
@@ -1021,7 +1042,6 @@ where
         msg_send_!(view, initOpenGL:conf.sample_count);
     };
 
-    msg_send_![display.gl_context, update];
     let _ = display.update_dimensions();
 
     assert!(!view.is_null());
@@ -1094,6 +1114,22 @@ where
                 }
             }
             unsafe {
+                if display.occluded {
+                    let now = Instant::now();
+                    let framerate = 60.0;
+                    let period = (1.0 / framerate * 1000.) as u64;
+
+                    match Duration::from_millis(period)
+                        .checked_sub(now - display.last_paint_start_time)
+                    {
+                        Some(delay) => {
+                            std::thread::sleep(delay);
+                        }
+                        None => {
+                            display.last_paint_start_time = now;
+                        }
+                    }
+                }
                 let view = match conf.platform.apple_gfx_api {
                     AppleGfxApi::OpenGl => msg_send_!(display.gl_context, flushBuffer),
                     AppleGfxApi::Metal => msg_send_!(view, draw),
