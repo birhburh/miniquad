@@ -771,8 +771,10 @@ unsafe fn create_metal_view(_: NSRect, sample_count: i32, _: bool) -> ObjcId {
         setDepthStencilPixelFormat: MTLPixelFormat::Depth32Float_Stencil8
     ];
     let () = msg_send![view, setSampleCount: sample_count];
-    let () = msg_send![view, setEnableSetNeedsDisplay: true];
+    // let () = msg_send![view, setEnableSetNeedsDisplay: true];
     let () = msg_send![view, setPaused: true];
+    // msg_send_![view, setPreferredFramesPerSecond:60];
+    // msg_send_![view, setDisplaySyncEnabled:YES];
 
     view
 }
@@ -1054,7 +1056,7 @@ where
             unsafe {
                 let view = match conf.platform.apple_gfx_api {
                     AppleGfxApi::OpenGl => msg_send_!(display.gl_context, flushBuffer),
-                    AppleGfxApi::Metal => msg_send_!(view, setNeedsDisplay: YES),
+                    AppleGfxApi::Metal => msg_send_!(view, draw),
                 };
             }
         }
