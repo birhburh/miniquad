@@ -339,14 +339,12 @@ pub fn define_cocoa_window_delegate() -> *const Class {
             let payload = get_window_payload(this);
             let responds: bool = msg_send![payload.window, respondsToSelector:sel!(occlusionState)];
             if responds {
-                const NSWindowOcclusionStateVisible: u64 = 1 << 1;
                 let state: u64 = msg_send![payload.window, occlusionState];
                 if state & NSWindowOcclusionStateVisible != 0 {
                     payload.occluded = false;
                 } else {
                     payload.occluded = true;
                 }
-                dbg!(payload.occluded);
             }
         }
     }
@@ -458,12 +456,6 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
         }
     }
     extern "C" fn mouse_down(this: &Object, _sel: Sel, event: ObjcId) {
-        let payload = get_window_payload(this);
-        unsafe {
-            println!("MOUSE DOWN");
-            let live_resize: bool = msg_send![payload.view, inLiveResize];
-            dbg!(live_resize);
-        }
         fire_mouse_event(this, event, true, MouseButton::Left);
     }
     extern "C" fn mouse_up(this: &Object, _sel: Sel, event: ObjcId) {
@@ -631,6 +623,11 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
 
         payload.modifiers = new_modifiers;
     }
+
+    extern "C" fn view_will_start_live_resize(_this: &Object, _sel: Sel) {}
+
+    extern "C" fn view_did_end_live_resize(_this: &Object, _sel: Sel) {}
+
     decl.add_method(
         sel!(canBecomeKey),
         yes as extern "C" fn(&Object, Sel) -> BOOL,
@@ -697,15 +694,20 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
         flags_changed as extern "C" fn(&Object, Sel, ObjcId),
     );
     decl.add_method(sel!(keyUp:), key_up as extern "C" fn(&Object, Sel, ObjcId));
+    decl.add_method(
+        sel!(viewWillStartLiveResize),
+        view_will_start_live_resize as extern "C" fn(&Object, Sel),
+    );
+    decl.add_method(
+        sel!(viewDidEndLiveResize),
+        view_did_end_live_resize as extern "C" fn(&Object, Sel),
+    );
 }
 
 pub fn define_opengl_view_class() -> *const Class {
     extern "C" fn reshape(this: &Object, _sel: Sel) {
-        println!("RESHAPE");
         let payload = get_window_payload(this);
         unsafe {
-            let live_resize: bool = msg_send![payload.view, inLiveResize];
-            dbg!(live_resize);
             if let Some((w, h)) = payload.update_dimensions() {
                 if let Some(event_handler) = payload.context() {
                     event_handler.resize_event(w as _, h as _);
@@ -715,7 +717,6 @@ pub fn define_opengl_view_class() -> *const Class {
     }
 
     extern "C" fn draw_rect(this: &Object, _sel: Sel, _: ObjcId) {
-        println!("DRAW RECT");
         let payload = get_window_payload(this);
         unsafe {
             if let Some((w, h)) = payload.update_dimensions() {
@@ -723,10 +724,10 @@ pub fn define_opengl_view_class() -> *const Class {
                     event_handler.resize_event(w as _, h as _);
                 }
             }
-            let live_resize: bool = msg_send![payload.view, inLiveResize];
-            dbg!(live_resize);
-            if live_resize {
-                perform_redraw(payload, AppleGfxApi::OpenGl);
+            let current_runloop = msg_send_![class!(NSRunLoop), currentRunLoop];
+            let current_mode: ObjcId = msg_send![current_runloop, currentMode];
+            if current_mode != nil {
+                perform_redraw(payload, AppleGfxApi::OpenGl, true);
             }
         }
     }
@@ -816,7 +817,6 @@ pub fn define_metal_view_class() -> *const Class {
     decl.add_ivar::<*mut c_void>("display_ptr");
 
     extern "C" fn draw_rect(this: &Object, _sel: Sel, _: ObjcId) {
-        println!("DRAW RECT");
         let payload = get_window_payload(this);
         unsafe {
             if let Some((w, h)) = payload.update_dimensions() {
@@ -824,10 +824,10 @@ pub fn define_metal_view_class() -> *const Class {
                     event_handler.resize_event(w as _, h as _);
                 }
             }
-            let live_resize: bool = msg_send![payload.view, inLiveResize];
-            dbg!(live_resize);
-            if live_resize {
-                perform_redraw(payload, AppleGfxApi::OpenGl);
+            let current_runloop = msg_send_![class!(NSRunLoop), currentRunLoop];
+            let current_mode: ObjcId = msg_send![current_runloop, currentMode];
+            if current_mode != nil {
+                perform_redraw(payload, AppleGfxApi::Metal, true);
             }
         }
     }
@@ -969,7 +969,11 @@ unsafe fn initialize_menu_bar(ns_app: ObjcId) {
     msg_send_![app_menu, addItem: quit_item];
 }
 
-unsafe fn perform_redraw(display: &mut MacosDisplay, apple_gfx_api: AppleGfxApi) {
+unsafe fn perform_redraw(
+    display: &mut MacosDisplay,
+    apple_gfx_api: AppleGfxApi,
+    in_draw_rect: bool,
+) {
     if display.event_handler.is_none() {
         let f = display.f.take().unwrap();
         display.event_handler = Some(f());
@@ -1009,8 +1013,14 @@ unsafe fn perform_redraw(display: &mut MacosDisplay, apple_gfx_api: AppleGfxApi)
             }
         }
         match apple_gfx_api {
-            AppleGfxApi::OpenGl => msg_send_!(display.gl_context, flushBuffer),
-            AppleGfxApi::Metal => msg_send_!(display.view, draw),
+            AppleGfxApi::OpenGl => {
+                msg_send_!(display.gl_context, flushBuffer);
+            }
+            AppleGfxApi::Metal => {
+                if !in_draw_rect {
+                    msg_send_!(display.view, draw);
+                }
+            }
         };
     }
 }
@@ -1068,7 +1078,6 @@ where
         | NSWindowStyleMask::NSClosableWindowMask as u64
         | NSWindowStyleMask::NSMiniaturizableWindowMask as u64
         | NSWindowStyleMask::NSResizableWindowMask as u64;
-    //| NSWindowStyleMask::NSFullSizeContentViewWindowMask as u64;
 
     let window_frame = NSRect {
         origin: NSPoint { x: 0., y: 0. },
@@ -1133,9 +1142,25 @@ where
     let () = msg_send![ns_app, activateIgnoringOtherApps: YES];
     let () = msg_send![window, makeKeyAndOrderFront: nil];
 
-    // Basically reimplementing msg_send![ns_app, run] here
     let () = msg_send![ns_app, finishLaunching];
 
+    // Found this here: https://github.com/kovidgoyal/kitty/issues/6341#issuecomment-1578348104
+    let current_runloop = msg_send_![class!(NSRunLoop), currentRunLoop];
+    let timer = match conf.platform.apple_gfx_api {
+        AppleGfxApi::OpenGl => msg_send_![class!(NSTimer), timerWithTimeInterval:0.016 // ~60FPS
+                                                           target:view
+                                                           selector:sel!(setNeedsDisplay:)
+                                                           userInfo:YES
+                                                           repeats:YES],
+        AppleGfxApi::Metal => msg_send_![class!(NSTimer), timerWithTimeInterval:0.016 // ~60FPS
+                                                          target:view
+                                                          selector:sel!(draw)
+                                                          userInfo:YES
+                                                          repeats:YES],
+    };
+    msg_send_![current_runloop, addTimer:timer forMode:NSEventTrackingRunLoopMode];
+
+    // Basically reimplementing msg_send![ns_app, run] here
     let distant_future: ObjcId = msg_send![class!(NSDate), distantFuture];
     let distant_past: ObjcId = msg_send![class!(NSDate), distantPast];
     let mut done = false;
@@ -1167,7 +1192,7 @@ where
         }
 
         if !conf.platform.blocking_event_loop || display.update_requested {
-            perform_redraw(&mut display, conf.platform.apple_gfx_api);
+            perform_redraw(&mut display, conf.platform.apple_gfx_api, false);
         }
     }
 }
