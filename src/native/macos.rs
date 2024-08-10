@@ -166,18 +166,20 @@ impl MacosDisplay {
             let dpi_scale: f64 = msg_send![self.window, backingScaleFactor];
             d.dpi_scale = dpi_scale as f32;
         } else {
-            let bounds: NSRect = msg_send![self.view, bounds];
-            let backing_size: NSSize = msg_send![self.view, convertSizeToBacking: NSSize {width: bounds.size.width, height: bounds.size.height}];
+            // TODO: Rewrite this part so metal code works in macroquad
+            // let bounds: NSRect = msg_send![self.view, bounds];
+            // let backing_size: NSSize = msg_send![self.view, convertSizeToBacking: NSSize {width: bounds.size.width, height: bounds.size.height}];
 
-            let content_rect: NSRect = msg_send![self.window, frame];
-            let fb_rect: NSRect = msg_send![self.view, convertRectToBacking:content_rect];
-            let dpi_scale: f64 = msg_send![self.window, backingScaleFactor];
-            dbg!(content_rect);
-            dbg!(fb_rect);
-            dbg!(bounds);
-            dbg!(backing_size);
-            d.dpi_scale = (backing_size.width / bounds.size.width) as f32;
-            dbg!(d.dpi_scale);
+            // let content_rect: NSRect = msg_send![self.window, frame];
+            // let fb_rect: NSRect = msg_send![self.view, convertRectToBacking:content_rect];
+            // let dpi_scale: f64 = msg_send![self.window, backingScaleFactor];
+            // dbg!(content_rect);
+            // dbg!(fb_rect);
+            // dbg!(bounds);
+            // dbg!(backing_size);
+            // d.dpi_scale = (backing_size.width / bounds.size.width) as f32;
+            // dbg!(dpi_scale);
+            // dbg!(d.dpi_scale);
             d.dpi_scale = 1.0;
         }
 
@@ -190,7 +192,6 @@ impl MacosDisplay {
         d.screen_width = screen_width;
         d.screen_height = screen_height;
 
-        dbg!((screen_width, screen_height));
         if dim_changed {
             Some((screen_width, screen_height))
         } else {
@@ -457,6 +458,12 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
         }
     }
     extern "C" fn mouse_down(this: &Object, _sel: Sel, event: ObjcId) {
+        let payload = get_window_payload(this);
+        unsafe {
+            println!("MOUSE DOWN");
+            let live_resize: bool = msg_send![payload.view, inLiveResize];
+            dbg!(live_resize);
+        }
         fire_mouse_event(this, event, true, MouseButton::Left);
     }
     extern "C" fn mouse_up(this: &Object, _sel: Sel, event: ObjcId) {
@@ -693,16 +700,33 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
 }
 
 pub fn define_opengl_view_class() -> *const Class {
-    //extern "C" fn dealloc(this: &Object, _sel: Sel) {}
-
     extern "C" fn reshape(this: &Object, _sel: Sel) {
         println!("RESHAPE");
+        let payload = get_window_payload(this);
+        unsafe {
+            let live_resize: bool = msg_send![payload.view, inLiveResize];
+            dbg!(live_resize);
+            if let Some((w, h)) = payload.update_dimensions() {
+                if let Some(event_handler) = payload.context() {
+                    event_handler.resize_event(w as _, h as _);
+                }
+            }
+        }
+    }
+
+    extern "C" fn draw_rect(this: &Object, _sel: Sel, _: ObjcId) {
+        println!("DRAW RECT");
         let payload = get_window_payload(this);
         unsafe {
             if let Some((w, h)) = payload.update_dimensions() {
                 if let Some(event_handler) = payload.context() {
                     event_handler.resize_event(w as _, h as _);
                 }
+            }
+            let live_resize: bool = msg_send![payload.view, inLiveResize];
+            dbg!(live_resize);
+            if live_resize {
+                perform_redraw(payload, AppleGfxApi::OpenGl);
             }
         }
     }
@@ -765,13 +789,6 @@ pub fn define_opengl_view_class() -> *const Class {
         }
     }
 
-    extern "C" fn update_layer(this: &Object, _sel: Sel) {
-        let payload = get_window_payload(this);
-        unsafe {
-            msg_send_![payload.gl_context, update];
-        }
-    }
-
     let superclass = class!(NSView);
     let mut decl: ClassDecl = ClassDecl::new("RenderViewClass", superclass).unwrap();
     unsafe {
@@ -781,12 +798,8 @@ pub fn define_opengl_view_class() -> *const Class {
         );
         decl.add_method(sel!(reshape), reshape as extern "C" fn(&Object, Sel));
         decl.add_method(
-            sel!(wantsUpdateLayer),
-            yes as extern "C" fn(&Object, Sel) -> BOOL,
-        );
-        decl.add_method(
-            sel!(updateLayer),
-            update_layer as extern "C" fn(&Object, Sel),
+            sel!(drawRect:),
+            draw_rect as extern "C" fn(&Object, Sel, ObjcId),
         );
 
         view_base_decl(&mut decl);
@@ -802,7 +815,28 @@ pub fn define_metal_view_class() -> *const Class {
     let mut decl = ClassDecl::new("RenderViewClass", superclass).unwrap();
     decl.add_ivar::<*mut c_void>("display_ptr");
 
+    extern "C" fn draw_rect(this: &Object, _sel: Sel, _: ObjcId) {
+        println!("DRAW RECT");
+        let payload = get_window_payload(this);
+        unsafe {
+            if let Some((w, h)) = payload.update_dimensions() {
+                if let Some(event_handler) = payload.context() {
+                    event_handler.resize_event(w as _, h as _);
+                }
+            }
+            let live_resize: bool = msg_send![payload.view, inLiveResize];
+            dbg!(live_resize);
+            if live_resize {
+                perform_redraw(payload, AppleGfxApi::OpenGl);
+            }
+        }
+    }
+
     unsafe {
+        decl.add_method(
+            sel!(drawRect:),
+            draw_rect as extern "C" fn(&Object, Sel, ObjcId),
+        );
         view_base_decl(&mut decl);
     }
 
@@ -829,15 +863,12 @@ unsafe fn create_metal_view(_: NSRect, sample_count: i32, _: bool) -> ObjcId {
         setDepthStencilPixelFormat: MTLPixelFormat::Depth32Float_Stencil8
     ];
     let () = msg_send![view, setSampleCount: sample_count];
-    // let () = msg_send![view, setEnableSetNeedsDisplay: true];
     let () = msg_send![view, setPaused: true];
-    // msg_send_![view, setPreferredFramesPerSecond:60];
-    // msg_send_![view, setDisplaySyncEnabled:YES];
 
     view
 }
 
-unsafe fn create_opengl_view(window_frame: NSRect, sample_count: i32, high_dpi: bool) -> ObjcId {
+unsafe fn create_opengl_view(high_dpi: bool) -> ObjcId {
     let view_class = define_opengl_view_class();
     let view: ObjcId = msg_send![view_class, alloc];
     let view: ObjcId = msg_send![view, init];
@@ -938,6 +969,52 @@ unsafe fn initialize_menu_bar(ns_app: ObjcId) {
     msg_send_![app_menu, addItem: quit_item];
 }
 
+unsafe fn perform_redraw(display: &mut MacosDisplay, apple_gfx_api: AppleGfxApi) {
+    if display.event_handler.is_none() {
+        let f = display.f.take().unwrap();
+        display.event_handler = Some(f());
+    }
+
+    let mut updated = false;
+
+    if let Some(event_handler) = display.context() {
+        event_handler.update();
+        event_handler.draw();
+        updated = true;
+    }
+    if updated {
+        display.update_requested = false;
+    }
+
+    {
+        let d = native_display().lock().unwrap();
+        if d.quit_requested || d.quit_ordered {
+            drop(d);
+            let () = msg_send![display.window, performClose: nil];
+        }
+    }
+    unsafe {
+        if display.occluded {
+            let now = Instant::now();
+            let framerate = 60.0;
+            let period = (1.0 / framerate * 1000.) as u64;
+
+            match Duration::from_millis(period).checked_sub(now - display.last_paint_start_time) {
+                Some(delay) => {
+                    std::thread::sleep(delay);
+                }
+                None => {
+                    display.last_paint_start_time = now;
+                }
+            }
+        }
+        match apple_gfx_api {
+            AppleGfxApi::OpenGl => msg_send_!(display.gl_context, flushBuffer),
+            AppleGfxApi::Metal => msg_send_!(display.view, draw),
+        };
+    }
+}
+
 pub unsafe fn run<F>(conf: crate::conf::Conf, f: F)
 where
     F: 'static + FnOnce() -> Box<dyn EventHandler>,
@@ -1024,7 +1101,7 @@ where
     let () = msg_send![window, setAcceptsMouseMovedEvents: YES];
 
     let view = match conf.platform.apple_gfx_api {
-        AppleGfxApi::OpenGl => create_opengl_view(window_frame, conf.sample_count, conf.high_dpi),
+        AppleGfxApi::OpenGl => create_opengl_view(conf.high_dpi),
         AppleGfxApi::Metal => create_metal_view(window_frame, conf.sample_count, conf.high_dpi),
     };
     {
@@ -1090,51 +1167,7 @@ where
         }
 
         if !conf.platform.blocking_event_loop || display.update_requested {
-            if display.event_handler.is_none() {
-                let f = display.f.take().unwrap();
-                display.event_handler = Some(f());
-            }
-
-            let mut updated = false;
-
-            if let Some(event_handler) = display.context() {
-                event_handler.update();
-                event_handler.draw();
-                updated = true;
-            }
-            if updated {
-                display.update_requested = false;
-            }
-
-            {
-                let d = native_display().lock().unwrap();
-                if d.quit_requested || d.quit_ordered {
-                    drop(d);
-                    let () = msg_send![display.window, performClose: nil];
-                }
-            }
-            unsafe {
-                if display.occluded {
-                    let now = Instant::now();
-                    let framerate = 60.0;
-                    let period = (1.0 / framerate * 1000.) as u64;
-
-                    match Duration::from_millis(period)
-                        .checked_sub(now - display.last_paint_start_time)
-                    {
-                        Some(delay) => {
-                            std::thread::sleep(delay);
-                        }
-                        None => {
-                            display.last_paint_start_time = now;
-                        }
-                    }
-                }
-                let view = match conf.platform.apple_gfx_api {
-                    AppleGfxApi::OpenGl => msg_send_!(display.gl_context, flushBuffer),
-                    AppleGfxApi::Metal => msg_send_!(view, draw),
-                };
-            }
+            perform_redraw(&mut display, conf.platform.apple_gfx_api);
         }
     }
 }
