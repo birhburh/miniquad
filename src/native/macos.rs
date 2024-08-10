@@ -153,6 +153,17 @@ impl MacosDisplay {
             let dpi_scale: f64 = msg_send![self.window, backingScaleFactor];
             d.dpi_scale = dpi_scale as f32;
         } else {
+            let bounds: NSRect = msg_send![self.view, bounds];
+            let backing_size: NSSize = msg_send![self.view, convertSizeToBacking: NSSize {width: bounds.size.width, height: bounds.size.height}];
+
+            let content_rect: NSRect = msg_send![self.window, frame];
+            let fb_rect: NSRect = msg_send![self.view, convertRectToBacking:content_rect];
+            dbg!(content_rect);
+            dbg!(fb_rect);
+            dbg!(bounds);
+            dbg!(backing_size);
+            d.dpi_scale = (backing_size.width / bounds.size.width) as f32;
+            dbg!(d.dpi_scale);
             d.dpi_scale = 1.0;
         }
 
@@ -165,6 +176,7 @@ impl MacosDisplay {
         d.screen_width = screen_width;
         d.screen_height = screen_height;
 
+        dbg!((screen_width, screen_height));
         if dim_changed {
             Some((screen_width, screen_height))
         } else {
@@ -277,10 +289,20 @@ pub fn define_cocoa_window_delegate() -> *const Class {
 
     extern "C" fn window_did_resize(this: &Object, _: Sel, _: ObjcId) {
         let payload = get_window_payload(this);
+        unsafe {
+            msg_send_![payload.gl_context, update];
+        }
         if let Some((w, h)) = unsafe { payload.update_dimensions() } {
             if let Some(event_handler) = payload.context() {
                 event_handler.resize_event(w as _, h as _);
             }
+        }
+    }
+
+    extern "C" fn window_did_move(this: &Object, _: Sel, _: ObjcId) {
+        let payload = get_window_payload(this);
+        unsafe {
+            msg_send_![payload.gl_context, update];
         }
     }
 
@@ -313,6 +335,10 @@ pub fn define_cocoa_window_delegate() -> *const Class {
         decl.add_method(
             sel!(windowDidResize:),
             window_did_resize as extern "C" fn(&Object, Sel, ObjcId),
+        );
+        decl.add_method(
+            sel!(windowDidMove:),
+            window_did_move as extern "C" fn(&Object, Sel, ObjcId),
         );
         decl.add_method(
             sel!(windowDidChangeScreen:),
@@ -638,11 +664,10 @@ pub fn define_opengl_view_class() -> *const Class {
     //extern "C" fn dealloc(this: &Object, _sel: Sel) {}
 
     extern "C" fn reshape(this: &Object, _sel: Sel) {
+        println!("RESHAPE");
         let payload = get_window_payload(this);
-
         unsafe {
-            let superclass = superclass(this);
-            let () = msg_send![super(this, superclass), reshape];
+            msg_send_![payload.gl_context, update];
 
             if let Some((w, h)) = payload.update_dimensions() {
                 if let Some(event_handler) = payload.context() {
@@ -712,6 +737,13 @@ pub fn define_opengl_view_class() -> *const Class {
         }
     }
 
+    extern "C" fn update_layer(this: &Object, _sel: Sel) {
+        let payload = get_window_payload(this);
+        unsafe {
+            msg_send_![payload.gl_context, update];
+        }
+    }
+
     let superclass = class!(NSView);
     let mut decl: ClassDecl = ClassDecl::new("RenderViewClass", superclass).unwrap();
     unsafe {
@@ -719,8 +751,15 @@ pub fn define_opengl_view_class() -> *const Class {
             sel!(initOpenGL:),
             init_open_gl as extern "C" fn(&Object, Sel, i32),
         );
-        //decl.add_method(sel!(dealloc), dealloc as extern "C" fn(&Object, Sel));
-        // decl.add_method(sel!(reshape), reshape as extern "C" fn(&Object, Sel));
+        decl.add_method(sel!(reshape), reshape as extern "C" fn(&Object, Sel));
+        decl.add_method(
+            sel!(wantsUpdateLayer),
+            yes as extern "C" fn(&Object, Sel) -> BOOL,
+        );
+        decl.add_method(
+            sel!(updateLayer),
+            update_layer as extern "C" fn(&Object, Sel),
+        );
 
         view_base_decl(&mut decl);
     }
@@ -982,6 +1021,7 @@ where
         msg_send_!(view, initOpenGL:conf.sample_count);
     };
 
+    msg_send_![display.gl_context, update];
     let _ = display.update_dimensions();
 
     assert!(!view.is_null());
