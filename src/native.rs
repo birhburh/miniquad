@@ -107,6 +107,9 @@ pub mod macos;
 #[cfg(target_os = "ios")]
 pub mod ios;
 
+#[cfg(target_os = "haiku")]
+pub mod haiku;
+
 #[cfg(any(target_os = "android", target_os = "linux"))]
 pub mod egl;
 

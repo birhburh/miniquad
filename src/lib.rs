@@ -388,4 +388,9 @@ where
     unsafe {
         native::ios::run(conf, f);
     }
+
+    #[cfg(target_os = "haiku")]
+    unsafe {
+        native::haiku::run(conf, f);
+    }
 }
