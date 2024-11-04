@@ -45,6 +45,7 @@ extern "C" {
     fn lock_gl(view: *mut QuadView);
     fn unlock_gl(view: *mut QuadView);
     fn swap_buffers(view: *mut QuadView);
+    fn accept_quitting(view: *mut QuadView);
 }
 
 #[no_mangle]
@@ -238,6 +239,7 @@ impl MainThreadState {
             Message::ViewDestroyed => unsafe {
                 self.started = false;
                 self.quit = true;
+                unsafe { accept_quitting(self.view); }
             },
             Message::ViewChanged { width, height } => {
                 {

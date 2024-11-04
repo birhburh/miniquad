@@ -29,7 +29,6 @@ class QuadView : public BGLView {
         sem_id          quittingSem;
 
     private:
-        thread_id       fDrawThread;
         unsigned int    VAO;
         unsigned int    VBO;
         unsigned int    vertexShader = 0;

@@ -40,6 +40,11 @@ void
 QuadView::DetachedFromWindow()
 {
     miniquad_view_destroyed();
+    while (acquire_sem_etc(quittingSem, 1, B_TIMEOUT, 100) == B_NO_ERROR)
+    {
+        release_sem(quittingSem);
+    }
+    release_sem(quittingSem);
     BGLView::DetachedFromWindow();
 }
 
@@ -112,6 +117,10 @@ extern "C" {
 
     void swap_buffers(QuadView* view) {
         view->SwapBuffers();
+    }
+
+    void accept_quitting(QuadView* view) {
+        acquire_sem(view->quittingSem);
     }
 }
 
