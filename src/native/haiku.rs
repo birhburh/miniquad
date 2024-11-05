@@ -62,7 +62,7 @@ unsafe extern "C" fn miniquad_view_destroyed() {
 
 #[no_mangle]
 unsafe extern "C" fn miniquad_view_changed(width: i32, height: i32) {
-    println!("miniquad_view_destroyed");
+    println!("miniquad_view_changed");
     send_message(&Message::ViewChanged {width, height});
 }
 
@@ -222,7 +222,7 @@ fn send_message(message: &Message) {
 struct MainThreadState {
     view: *mut QuadView,
     event_handler: Box<dyn EventHandler>,
-    started: bool,
+    running: bool,
     quit: bool,
     fullscreen: bool,
     update_requested: bool,
@@ -234,10 +234,10 @@ impl MainThreadState {
         dbg!(&msg);
         match msg {
             Message::ViewCreated => unsafe {
-                self.started = true;
+                self.running = true;
             },
             Message::ViewDestroyed => unsafe {
-                self.started = false;
+                self.running = false;
                 self.quit = true;
                 unsafe { accept_quitting(self.view); }
             },
@@ -283,7 +283,7 @@ impl MainThreadState {
         self.event_handler.update();
         self.update_requested = false;
         unsafe {
-            if self.started {
+            if self.running {
                 lock_gl(self.view);
                 self.event_handler.draw();
                 swap_buffers(self.view);
@@ -389,6 +389,8 @@ where
     MSG_PORT = create_port(queue_length, "msg port\0".as_ptr() as *const libc::c_char);
 
     let title = std::ffi::CString::new(conf.window_title.as_str()).unwrap();
+    let window_width = conf.window_width as f32;
+    let window_height = conf.window_height as f32;
 
     thread::spawn(move || {
         let (tx, requests_rx) = std::sync::mpsc::channel();
@@ -405,7 +407,7 @@ where
         let mut s = MainThreadState {
             view: hacked_view.0,
             event_handler,
-            started: false,
+            running: false,
             quit: false,
             fullscreen: conf.fullscreen,
             update_requested: true,
@@ -472,6 +474,6 @@ where
     });
 
     unsafe {
-        shim_app_run(app, new_brect(5., 25., 300., 315.), title.as_ptr(), view);
+        shim_app_run(app, new_brect(10., 10., window_width, window_height), title.as_ptr(), view);
     };
 }

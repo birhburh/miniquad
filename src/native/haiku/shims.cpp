@@ -32,7 +32,6 @@ QuadView::~QuadView()
 void
 QuadView::AttachedToWindow()
 {
-    miniquad_view_created();
     BGLView::AttachedToWindow();
 }
 
@@ -51,6 +50,7 @@ QuadView::DetachedFromWindow()
 void
 QuadView::FrameResized(float width, float height)
 {
+    printf("FrameResized: %.2f %.2f\n", width, height);
     miniquad_view_changed(static_cast<int>(width), static_cast<int>(height));
     BGLView::FrameResized(width, height);
 }
@@ -132,14 +132,15 @@ QuadWindow::QuadWindow(BRect rect, const char* name, QuadView *view)
         BRect bounds = Bounds();
         BView *subView = new BView(bounds, "subview", B_FOLLOW_ALL, 0); 
         AddChild(subView); 
-    
-        subView->AddChild(view);
 
         bounds = subView->Bounds(); 
         view->MoveTo(bounds.left, bounds.top);
-        view->ResizeTo(bounds.right, bounds.bottom);
-        miniquad_view_changed(static_cast<int>(bounds.right), static_cast<int>(bounds.bottom));
+        view->ResizeTo(bounds.right, bounds.bottom);    
+        subView->AddChild(view);
 
+        miniquad_view_changed(static_cast<int>(bounds.right), static_cast<int>(bounds.bottom));
+        miniquad_view_created();
+        
         SetSizeLimits(32, 1024, 32, 1024);
         Unlock();
 }
