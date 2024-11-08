@@ -1,4 +1,46 @@
-#include "shims.h"
+#include <memory>
+
+#include <Application.h>
+#include <GLView.h>
+#include <DirectWindow.h>
+#include <Rect.h>
+
+class ShimApp : public BApplication {
+public:
+    ShimApp(const char* sign): BApplication(sign) {}; 
+};
+
+class QuadView : public BGLView {
+    public:
+        bool            fLimitFps;
+                        QuadView(BRect rect, const char* name,
+                            ulong resizingMode, ulong options);
+                        ~QuadView();
+
+        virtual void    MouseDown(BPoint point);
+        virtual void    MouseUp(BPoint point);
+        virtual void    MouseMoved(BPoint point, uint32 transit, const BMessage *msg);
+
+        virtual void    MessageReceived(BMessage* msg);
+        virtual void    AttachedToWindow();
+        virtual void    DetachedFromWindow();
+        virtual void    FrameResized(float width, float height);
+
+        sem_id          quittingSem;
+
+    private:
+        unsigned int    VAO;
+        unsigned int    VBO;
+        unsigned int    vertexShader = 0;
+        unsigned int    fragmentShader = 0;
+        unsigned int    shaderProgram = 0;
+};
+
+extern "C" {
+    void miniquad_view_created(void);
+    void miniquad_view_destroyed(void);
+    void miniquad_view_changed(int width, int height);
+}
 
 #include <stdio.h>
 #include <new>
@@ -78,7 +120,7 @@ QuadView::MessageReceived(BMessage* msg)
 
 class QuadWindow : public BDirectWindow {
         public:
-            QuadWindow(BRect r, const char* name, QuadView* view);
+                QuadWindow(BRect r, const char* name, QuadView* view);
                 virtual bool    QuitRequested();
                 virtual void    MessageReceived(BMessage* msg);
 };
@@ -101,8 +143,11 @@ extern "C" {
  
     }
     
-    int shim_app_run(ShimApp* app, BRect* rect, const char* name, QuadView *view) {
+    int shim_app_run(ShimApp* app, BRect* rect, const char* name, QuadView *view, bool fullscreen) {
         QuadWindow* fQuadWindow = new QuadWindow(*rect, name, view); 
+        fQuadWindow->CenterOnScreen();
+        if (fullscreen)
+            fQuadWindow->SetFullScreen(true);
         fQuadWindow->Show();
         return app->Run();
     }   
@@ -141,7 +186,6 @@ QuadWindow::QuadWindow(BRect rect, const char* name, QuadView *view)
         miniquad_view_changed(static_cast<int>(bounds.right), static_cast<int>(bounds.bottom));
         miniquad_view_created();
         
-        SetSizeLimits(32, 1024, 32, 1024);
         Unlock();
 }
 

@@ -40,6 +40,7 @@ extern "C" {
         rect: *mut BRect,
         name: *const libc::c_char,
         view: *mut QuadView,
+        fullscreen: bool,
     ) -> i32;
     fn new_brect(left: f32, top: f32, right: f32, bottom: f32) -> *mut BRect;
     fn lock_gl(view: *mut QuadView);
@@ -391,6 +392,7 @@ where
     let title = std::ffi::CString::new(conf.window_title.as_str()).unwrap();
     let window_width = conf.window_width as f32;
     let window_height = conf.window_height as f32;
+    let fullscreen = conf.fullscreen;
 
     thread::spawn(move || {
         let (tx, requests_rx) = std::sync::mpsc::channel();
@@ -474,6 +476,6 @@ where
     });
 
     unsafe {
-        shim_app_run(app, new_brect(10., 10., window_width, window_height), title.as_ptr(), view);
+        shim_app_run(app, new_brect(30., 30., window_width, window_height), title.as_ptr(), view, fullscreen);
     };
 }

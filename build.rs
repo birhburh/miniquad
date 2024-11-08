@@ -9,14 +9,13 @@ fn main() {
         cc::Build::new()
             .cpp(true)
             .include("src/native/haiku")
-            .file("src/native/haiku/shims.cpp")
+            .file("src/native/haiku/QuadWindow.cpp")
             .compile("shims_lib");
 
         println!("cargo:rustc-link-lib=be");
         println!("cargo:rustc-link-lib=game");
         println!("cargo:rustc-link-lib=GL");
 
-        println!("cargo:rerun-if-changed=src/native/haiku/shims.cpp");
-        println!("cargo:rerun-if-changed=src/native/haiku/shims.h");
+        println!("cargo:rerun-if-changed=src/native/haiku/QuadWindow.cpp");
     }
 }
