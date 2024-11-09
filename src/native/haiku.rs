@@ -1,18 +1,14 @@
 use {
     crate::{
-        conf::Icon,
         event::{EventHandler, MouseButton},
-        native::{gl, NativeDisplayData, Request},
-        native_display, CursorIcon, KeyCode, KeyMods,
+        native::NativeDisplayData,
+        KeyCode, KeyMods,
     },
     std::{
-       mem::size_of, cell::RefCell,
-        collections::HashMap,
         convert::{TryFrom, TryInto},
+        mem::size_of,
         os::raw::c_void,
-        sync::mpsc::{self, Receiver},
         thread,
-        time::{Duration, Instant},
     },
 };
 
@@ -49,36 +45,45 @@ extern "C" {
     fn accept_quitting(view: *mut QuadView);
 }
 
-#[no_mangle]
-unsafe extern "C" fn miniquad_view_created() {
-    println!("miniquad_view_created");
-    send_message(&Message::ViewCreated);
-}
-
-#[no_mangle]
-unsafe extern "C" fn miniquad_view_destroyed() {
-    println!("miniquad_view_destroyed");
-    send_message(&Message::ViewDestroyed);
-}
-
-#[no_mangle]
-unsafe extern "C" fn miniquad_view_changed(width: i32, height: i32) {
-    println!("miniquad_view_changed");
-    send_message(&Message::ViewChanged {width, height});
-}
-
 #[derive(Debug)]
 enum Message {
-    ViewChanged { width: i32, height: i32 },
+    ViewChanged {
+        width: i32,
+        height: i32,
+    },
     ViewCreated,
     ViewDestroyed,
-    Character { character: u32 },
-    KeyDown { keycode: KeyCode },
-    KeyUp { keycode: KeyCode },
+    MouseMoved {
+        x: f32,
+        y: f32,
+    },
+    MouseButtonDown {
+        x: f32,
+        y: f32,
+    },
+    MouseButtonUp {
+        x: f32,
+        y: f32,
+    },
+    Character {
+        character: char,
+        modifiers: i32,
+        repeat: bool,
+    },
+    KeyDown {
+        keycode: i32,
+        modifiers: i32,
+        repeat: bool,
+    },
+    KeyUp {
+        keycode: i32,
+        modifiers: i32,
+    },
 }
 unsafe impl Send for Message {}
 const MSG_SIZE: usize = size_of::<Message>();
 
+#[allow(non_camel_case_types)]
 type port_id = i32;
 
 impl TryFrom<i32> for Message {
@@ -93,12 +98,22 @@ impl TryFrom<i32> for Message {
             }),
             1 => Ok(ViewCreated),
             2 => Ok(ViewDestroyed),
-            3 => Ok(Character { character: 0 }),
-            4 => Ok(KeyDown {
-                keycode: KeyCode::Space,
+            3 => Ok(MouseMoved { x: 0., y: 0. }),
+            4 => Ok(MouseButtonDown { x: 0., y: 0. }),
+            5 => Ok(MouseButtonUp { x: 0., y: 0. }),
+            6 => Ok(Character {
+                character: 'a',
+                modifiers: 0,
+                repeat: false,
             }),
-            5 => Ok(KeyUp {
-                keycode: KeyCode::Space,
+            7 => Ok(KeyDown {
+                keycode: 0,
+                modifiers: 0,
+                repeat: false,
+            }),
+            8 => Ok(KeyUp {
+                keycode: 0,
+                modifiers: 0,
             }),
             _ => Err(()),
         }
@@ -114,13 +129,19 @@ impl TryFrom<&Message> for i32 {
             ViewChanged { .. } => Ok(0),
             ViewCreated => Ok(1),
             ViewDestroyed => Ok(2),
-            _ => Err(()),
+            MouseMoved { .. } => Ok(3),
+            MouseButtonDown { .. } => Ok(4),
+            MouseButtonUp { .. } => Ok(5),
+            Character { .. } => Ok(6),
+            KeyDown { .. } => Ok(7),
+            KeyUp { .. } => Ok(8),
         }
     }
 }
 
 static mut MSG_PORT: port_id = 0;
 
+#[allow(non_camel_case_types)]
 type status_t = i32;
 const B_OK: libc::ssize_t = 0;
 const B_TIMEOUT: u32 = 8;
@@ -171,14 +192,112 @@ impl TryFrom<&Message> for [u8; MSG_SIZE] {
                 for i in 0..size_of::<i32>() {
                     res[index + i] = bytes[i];
                 }
-            },
+            }
             ViewCreated => {
                 res[0] = 1;
-            },
+            }
             ViewDestroyed => {
                 res[0] = 2;
-            },
-            _ => return Err(()),
+            }
+            MouseMoved { x, y } => {
+                let mut index = 0;
+                res[0] = 3;
+                index += 1;
+                let bytes = x.to_ne_bytes();
+                for i in 0..size_of::<f32>() {
+                    res[index + i] = bytes[i];
+                }
+                index += size_of::<f32>();
+                let bytes = y.to_ne_bytes();
+                for i in 0..size_of::<f32>() {
+                    res[index + i] = bytes[i];
+                }
+            }
+            MouseButtonDown { x, y } => {
+                let mut index = 0;
+                res[0] = 4;
+                index += 1;
+                let bytes = x.to_ne_bytes();
+                for i in 0..size_of::<f32>() {
+                    res[index + i] = bytes[i];
+                }
+                index += size_of::<f32>();
+                let bytes = y.to_ne_bytes();
+                for i in 0..size_of::<f32>() {
+                    res[index + i] = bytes[i];
+                }
+            }
+            MouseButtonUp { x, y } => {
+                let mut index = 0;
+                res[0] = 5;
+                index += 1;
+                let bytes = x.to_ne_bytes();
+                for i in 0..size_of::<f32>() {
+                    res[index + i] = bytes[i];
+                }
+                index += size_of::<f32>();
+                let bytes = y.to_ne_bytes();
+                for i in 0..size_of::<f32>() {
+                    res[index + i] = bytes[i];
+                }
+            }
+            Character {
+                character,
+                modifiers,
+                repeat,
+            } => {
+                let mut index = 0;
+                res[0] = 6;
+                index += 1;
+                let bytes = (*character as u32).to_ne_bytes();
+                for i in 0..size_of::<u32>() {
+                    res[index + i] = bytes[i];
+                }
+                index += size_of::<u32>();
+                let bytes = modifiers.to_ne_bytes();
+                for i in 0..size_of::<i32>() {
+                    res[index + i] = bytes[i];
+                }
+                index += size_of::<i32>();
+                res[index] = *repeat as u8;
+            }
+            KeyDown {
+                keycode,
+                modifiers,
+                repeat,
+            } => {
+                let mut index = 0;
+                res[0] = 7;
+                index += 1;
+                let bytes = keycode.to_ne_bytes();
+                for i in 0..size_of::<i32>() {
+                    res[index + i] = bytes[i];
+                }
+                index += size_of::<i32>();
+                let bytes = modifiers.to_ne_bytes();
+                for i in 0..size_of::<i32>() {
+                    res[index + i] = bytes[i];
+                }
+                index += size_of::<i32>();
+                res[index] = *repeat as u8;
+            }
+            KeyUp {
+                keycode,
+                modifiers,
+            } => {
+                let mut index = 0;
+                res[0] = 8;
+                index += 1;
+                let bytes = keycode.to_ne_bytes();
+                for i in 0..size_of::<i32>() {
+                    res[index + i] = bytes[i];
+                }
+                index += size_of::<i32>();
+                let bytes = modifiers.to_ne_bytes();
+                for i in 0..size_of::<i32>() {
+                    res[index + i] = bytes[i];
+                }
+            }
         }
         Ok(res)
     }
@@ -192,16 +311,94 @@ impl TryFrom<[u8; MSG_SIZE]> for Message {
         match v[0] {
             0 => {
                 let mut index = 1;
-                let bytes: [u8; size_of::<i32>()] = v[index..index+size_of::<i32>()].try_into().unwrap();
+                let bytes: [u8; size_of::<i32>()] =
+                    v[index..index + size_of::<i32>()].try_into().unwrap();
                 let width = i32::from_ne_bytes(bytes);
                 index += size_of::<i32>();
-                let bytes: [u8; size_of::<i32>()] = v[index..index+size_of::<i32>()].try_into().unwrap();
+                let bytes: [u8; size_of::<i32>()] =
+                    v[index..index + size_of::<i32>()].try_into().unwrap();
                 let height = i32::from_ne_bytes(bytes);
-                let res = ViewChanged {width, height};
+                let res = ViewChanged { width, height };
                 Ok(res)
-            },
+            }
             1 => Ok(ViewCreated),
             2 => Ok(ViewDestroyed),
+            3 => {
+                let mut index = 1;
+                let bytes: [u8; size_of::<f32>()] =
+                    v[index..index + size_of::<f32>()].try_into().unwrap();
+                let x = f32::from_ne_bytes(bytes);
+                index += size_of::<f32>();
+                let bytes: [u8; size_of::<f32>()] =
+                    v[index..index + size_of::<f32>()].try_into().unwrap();
+                let y = f32::from_ne_bytes(bytes);
+                let res = MouseMoved { x, y };
+                Ok(res)
+            }
+            4 => {
+                let mut index = 1;
+                let bytes: [u8; size_of::<f32>()] =
+                    v[index..index + size_of::<f32>()].try_into().unwrap();
+                let x = f32::from_ne_bytes(bytes);
+                index += size_of::<f32>();
+                let bytes: [u8; size_of::<f32>()] =
+                    v[index..index + size_of::<f32>()].try_into().unwrap();
+                let y = f32::from_ne_bytes(bytes);
+                let res = MouseButtonDown { x, y };
+                Ok(res)
+            }
+            5 => {
+                let mut index = 1;
+                let bytes: [u8; size_of::<f32>()] =
+                    v[index..index + size_of::<f32>()].try_into().unwrap();
+                let x = f32::from_ne_bytes(bytes);
+                index += size_of::<f32>();
+                let bytes: [u8; size_of::<f32>()] =
+                    v[index..index + size_of::<f32>()].try_into().unwrap();
+                let y = f32::from_ne_bytes(bytes);
+                let res = MouseButtonUp { x, y };
+                Ok(res)
+            }
+            6 => {
+                let mut index = 1;
+                let bytes: [u8; size_of::<u32>()] =
+                    v[index..index + size_of::<u32>()].try_into().unwrap();
+                let character = char::from_u32(u32::from_ne_bytes(bytes)).unwrap();
+                index += size_of::<u32>();
+                let bytes: [u8; size_of::<i32>()] =
+                    v[index..index + size_of::<i32>()].try_into().unwrap();
+                let modifiers = i32::from_ne_bytes(bytes);
+                index += size_of::<i32>();
+                let repeat = v[index] != 0;
+                let res = Character { character, modifiers, repeat };
+                Ok(res)
+            }
+            7 => {
+                let mut index = 1;
+                let bytes: [u8; size_of::<i32>()] =
+                    v[index..index + size_of::<i32>()].try_into().unwrap();
+                let keycode = i32::from_ne_bytes(bytes);
+                index += size_of::<i32>();
+                let bytes: [u8; size_of::<i32>()] =
+                    v[index..index + size_of::<i32>()].try_into().unwrap();
+                let modifiers = i32::from_ne_bytes(bytes);
+                index += size_of::<i32>();
+                let repeat = v[index] != 0;
+                let res = KeyDown { keycode, modifiers, repeat };
+                Ok(res)
+            }
+            8 => {
+                let mut index = 1;
+                let bytes: [u8; size_of::<i32>()] =
+                    v[index..index + size_of::<i32>()].try_into().unwrap();
+                let keycode = i32::from_ne_bytes(bytes);
+                index += size_of::<i32>();
+                let bytes: [u8; size_of::<i32>()] =
+                    v[index..index + size_of::<i32>()].try_into().unwrap();
+                let modifiers = i32::from_ne_bytes(bytes);
+                let res = KeyUp { keycode, modifiers };
+                Ok(res)
+            }
             _ => Err(()),
         }
     }
@@ -220,6 +417,178 @@ fn send_message(message: &Message) {
     }
 }
 
+#[no_mangle]
+unsafe extern "C" fn miniquad_view_created() {
+    println!("miniquad_view_created");
+    send_message(&Message::ViewCreated);
+}
+
+#[no_mangle]
+unsafe extern "C" fn miniquad_view_destroyed() {
+    println!("miniquad_view_destroyed");
+    send_message(&Message::ViewDestroyed);
+}
+
+#[no_mangle]
+unsafe extern "C" fn miniquad_view_changed(width: i32, height: i32) {
+    send_message(&Message::ViewChanged { width, height });
+}
+
+#[no_mangle]
+unsafe extern "C" fn miniquad_mouse_moved(x: f32, y: f32) {
+    send_message(&Message::MouseMoved { x, y });
+}
+
+#[no_mangle]
+unsafe extern "C" fn miniquad_mouse_button_down(x: f32, y: f32) {
+    send_message(&Message::MouseButtonDown { x, y });
+}
+
+#[no_mangle]
+unsafe extern "C" fn miniquad_mouse_button_up(x: f32, y: f32) {
+    send_message(&Message::MouseButtonUp { x, y });
+}
+
+#[allow(non_camel_case_types)]
+#[repr(i32)]
+pub enum HaikuModifiers {
+    B_SHIFT_KEY = 0x00000001,
+    B_COMMAND_KEY = 0x00000002,
+    B_CONTROL_KEY = 0x00000004,
+    B_CAPS_LOCK = 0x00000008,
+    B_SCROLL_LOCK = 0x00000010,
+    B_NUM_LOCK = 0x00000020,
+    B_OPTION_KEY = 0x00000040,
+    B_MENU_KEY = 0x00000080,
+    B_LEFT_SHIFT_KEY = 0x00000100,
+    B_RIGHT_SHIFT_KEY = 0x00000200,
+    B_LEFT_COMMAND_KEY = 0x00000400,
+    B_RIGHT_COMMAND_KEY = 0x00000800,
+    B_LEFT_CONTROL_KEY = 0x00001000,
+    B_RIGHT_CONTROL_KEY = 0x00002000,
+    B_LEFT_OPTION_KEY = 0x00004000,
+    B_RIGHT_OPTION_KEY = 0x00008000,
+}
+
+unsafe fn key_mods(modifiers: i32) -> KeyMods {
+    use HaikuModifiers::*;
+
+    let mut mods = KeyMods::default();
+
+    if modifiers | B_SHIFT_KEY as i32 != 0 {
+        mods.shift = true;
+    }
+    if modifiers | B_CONTROL_KEY as i32 != 0 {
+        mods.ctrl = true;
+    }
+    if modifiers | B_MENU_KEY as i32 != 0 {
+        mods.alt = true;
+    }
+    if modifiers | B_OPTION_KEY as i32 != 0 {
+        mods.logo = true;
+    }
+
+    mods
+}
+
+
+pub fn convert_keycode(keycode: i32) -> Option<KeyCode> {
+    Some(match keycode {
+        0x12 => KeyCode::Key1,
+        0x13 => KeyCode::Key2,
+        0x14 => KeyCode::Key3,
+        0x15 => KeyCode::Key4,
+        0x16 => KeyCode::Key5,
+        0x17 => KeyCode::Key6,
+        0x18 => KeyCode::Key7,
+        0x19 => KeyCode::Key8,
+        0x1a => KeyCode::Key9,
+        0x1b => KeyCode::Key0,
+        0x1c => KeyCode::Minus,
+        0x1d => KeyCode::Equal,
+
+        0x23 => KeyCode::KpDivide,
+        0x24 => KeyCode::KpMultiply,
+        0x25 => KeyCode::KpSubtract,
+        0x26 => KeyCode::Tab,
+
+        0x27 => KeyCode::Q,
+        0x28 => KeyCode::W,
+        0x29 => KeyCode::E,
+        0x2A => KeyCode::R,
+        0x2B => KeyCode::T,
+        0x2C => KeyCode::Y,
+        0x2D => KeyCode::U,
+        0x2E => KeyCode::I,
+        0x2F => KeyCode::O,
+        0x30 => KeyCode::P,
+
+        0x31 => KeyCode::LeftBracket,
+        0x32 => KeyCode::RightBracket,
+        0x33 => KeyCode::Backslash,
+
+        0x3A => KeyCode::KpAdd,
+
+        0x3C => KeyCode::A,
+        0x3D => KeyCode::S,
+        0x3E => KeyCode::D,
+        0x3F => KeyCode::F,
+        0x40 => KeyCode::G,
+        0x41 => KeyCode::H,
+        0x42 => KeyCode::J,
+        0x43 => KeyCode::K,
+        0x44 => KeyCode::L,
+
+        0x45 => KeyCode::Semicolon,
+        0x46 => KeyCode::Apostrophe,
+        0x47 => KeyCode::Enter,
+
+        0x4C => KeyCode::Z,
+        0x4D => KeyCode::X,
+        0x4E => KeyCode::C,
+        0x4F => KeyCode::V,
+        0x50 => KeyCode::B,
+        0x51 => KeyCode::N,
+        0x52 => KeyCode::M,
+
+        0x53 => KeyCode::Comma,
+        0x54 => KeyCode::Period,
+        0x55 => KeyCode::Slash,
+
+        0x5E => KeyCode::Space,
+
+        0x57 => KeyCode::Up,
+        0x61 => KeyCode::Left,
+        0x62 => KeyCode::Down,
+        0x63 => KeyCode::Right,
+
+        _ => return None,
+    })
+}
+
+#[no_mangle]
+unsafe extern "C" fn miniquad_char(bytes: *const u8, byte_len: u8, modifiers: i32, repeat: i32) {
+    let bytes = &*std::ptr::slice_from_raw_parts(bytes, byte_len as usize) as &[u8];
+    let s = std::str::from_utf8(bytes).unwrap();
+    let character = s.chars().next().unwrap();
+    let repeat = repeat > 0;
+    send_message(&Message::Character {
+        character,
+        modifiers,
+        repeat,
+    });
+}
+
+#[no_mangle]
+unsafe extern "C" fn miniquad_key_down(keycode: i32, modifiers: i32, repeat: i32) {
+    send_message(&Message::KeyDown {keycode, modifiers, repeat: repeat > 0});
+}
+
+#[no_mangle]
+unsafe extern "C" fn miniquad_key_up(keycode: i32, modifiers: i32) {
+    send_message(&Message::KeyUp {keycode, modifiers});
+}
+
 struct MainThreadState {
     view: *mut QuadView,
     event_handler: Box<dyn EventHandler>,
@@ -227,21 +596,22 @@ struct MainThreadState {
     quit: bool,
     fullscreen: bool,
     update_requested: bool,
-    keymods: KeyMods,
 }
 
 impl MainThreadState {
     fn process_message(&mut self, msg: Message) {
         dbg!(&msg);
         match msg {
-            Message::ViewCreated => unsafe {
+            Message::ViewCreated => {
                 self.running = true;
-            },
-            Message::ViewDestroyed => unsafe {
+            }
+            Message::ViewDestroyed => {
                 self.running = false;
                 self.quit = true;
-                unsafe { accept_quitting(self.view); }
-            },
+                unsafe {
+                    accept_quitting(self.view);
+                }
+            }
             Message::ViewChanged { width, height } => {
                 {
                     let mut d = crate::native_display().lock().unwrap();
@@ -250,32 +620,46 @@ impl MainThreadState {
                 }
                 self.event_handler.resize_event(width as _, height as _);
             }
-            Message::Character { character } => {
-                if let Some(character) = char::from_u32(character) {
-                    self.event_handler
-                        .char_event(character, Default::default(), false);
-                }
+            Message::MouseMoved { x, y } => {
+                self.event_handler.mouse_motion_event(x, y);
             }
-            Message::KeyDown { keycode } => {
-                match keycode {
-                    KeyCode::LeftShift | KeyCode::RightShift => self.keymods.shift = true,
-                    KeyCode::LeftControl | KeyCode::RightControl => self.keymods.ctrl = true,
-                    KeyCode::LeftAlt | KeyCode::RightAlt => self.keymods.alt = true,
-                    KeyCode::LeftSuper | KeyCode::RightSuper => self.keymods.logo = true,
-                    _ => {}
-                }
+            Message::MouseButtonDown { x, y } => {
                 self.event_handler
-                    .key_down_event(keycode, self.keymods, false);
+                    .mouse_button_down_event(MouseButton::Left, x, y);
             }
-            Message::KeyUp { keycode } => {
-                match keycode {
-                    KeyCode::LeftShift | KeyCode::RightShift => self.keymods.shift = false,
-                    KeyCode::LeftControl | KeyCode::RightControl => self.keymods.ctrl = false,
-                    KeyCode::LeftAlt | KeyCode::RightAlt => self.keymods.alt = false,
-                    KeyCode::LeftSuper | KeyCode::RightSuper => self.keymods.logo = false,
-                    _ => {}
+            Message::MouseButtonUp { x, y } => {
+                self.event_handler
+                    .mouse_button_up_event(MouseButton::Left, x, y);
+            }
+            Message::Character {
+                character,
+                modifiers,
+                repeat,
+            } => {
+                let modifiers = unsafe { key_mods(modifiers) };
+                self.event_handler.char_event(character, modifiers, repeat);
+            }
+            Message::KeyDown {
+                keycode,
+                modifiers,
+                repeat,
+            } => {
+                dbg!(convert_keycode(keycode));
+                if let Some(key) = convert_keycode(keycode) {
+                    let modifiers = unsafe { key_mods(modifiers) };
+                    self.event_handler
+                        .key_down_event(key, modifiers, repeat);
                 }
-                self.event_handler.key_up_event(keycode, self.keymods);
+            }
+            Message::KeyUp {
+                keycode,
+                modifiers,
+            } => {
+                if let Some(key) = convert_keycode(keycode) {
+                    let modifiers = unsafe { key_mods(modifiers) };
+                    self.event_handler
+                        .key_up_event(key, modifiers);
+                }
             }
         }
     }
@@ -300,16 +684,12 @@ impl MainThreadState {
             ScheduleUpdate => {
                 self.update_requested = true;
             }
-            SetFullscreen(fullscreen) => {
-                // unsafe {
-                //     let env = attach_jni_env();
-                //     set_full_screen(env, fullscreen);
-                // }
-                self.fullscreen = fullscreen;
-            }
-            ShowKeyboard(show) => unsafe {
+            SetFullscreen(_) => {
                 unimplemented!();
-            },
+            }
+            ShowKeyboard(_) => {
+                unimplemented!();
+            }
             _ => {}
         }
     }
@@ -326,7 +706,7 @@ impl crate::native::Clipboard for HaikuClipboard {
         unimplemented!();
     }
 
-    fn set(&mut self, data: &str) {
+    fn set(&mut self, _data: &str) {
         unimplemented!();
     }
 }
@@ -413,12 +793,6 @@ where
             quit: false,
             fullscreen: conf.fullscreen,
             update_requested: true,
-            keymods: KeyMods {
-                shift: false,
-                ctrl: false,
-                alt: false,
-                logo: false,
-            },
         };
 
         while !s.quit {
@@ -455,7 +829,7 @@ where
                             message.as_ptr() as *mut c_void,
                             message.len(),
                             B_TIMEOUT,
-                            0
+                            0,
                         )
                     };
 
@@ -476,6 +850,12 @@ where
     });
 
     unsafe {
-        shim_app_run(app, new_brect(30., 30., window_width, window_height), title.as_ptr(), view, fullscreen);
+        shim_app_run(
+            app,
+            new_brect(30., 30., window_width, window_height),
+            title.as_ptr(),
+            view,
+            fullscreen,
+        );
     };
 }

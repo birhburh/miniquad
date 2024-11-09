@@ -40,6 +40,12 @@ extern "C" {
     void miniquad_view_created(void);
     void miniquad_view_destroyed(void);
     void miniquad_view_changed(int width, int height);
+    void miniquad_mouse_moved(float x, float y);
+    void miniquad_mouse_button_down(float x, float y);
+    void miniquad_mouse_button_up(float x, float y);
+    void miniquad_char(uint8 *bytes, uint8 bytesLen, int32 modifiers, int32 repeat);
+    void miniquad_key_down(int32 key, int32 modifiers, int32 repeat);
+    void miniquad_key_up(int32 key, int32 modifiers);
 }
 
 #include <stdio.h>
@@ -98,23 +104,67 @@ QuadView::FrameResized(float width, float height)
 }
 
 void
-QuadView::MouseMoved(BPoint point, uint32 transit, const BMessage *msg)
+QuadView::MouseMoved(BPoint point, uint32, const BMessage*)
 {
-}
-
-void
-QuadView::MouseUp(BPoint point)
-{
+    miniquad_mouse_moved(point.x, point.y);
 }
 
 void
 QuadView::MouseDown(BPoint point)
 {
+    printf("Mouse Down!\n");
+    if (!IsFocus())
+        MakeFocus();
+    miniquad_mouse_button_down(point.x, point.y);
+}
+
+void
+QuadView::MouseUp(BPoint point)
+{
+    miniquad_mouse_button_up(point.x, point.y);
 }
 
 void
 QuadView::MessageReceived(BMessage* msg)
 {
+
+    switch (msg->what) {
+        case B_KEY_DOWN:
+        case B_UNMAPPED_KEY_DOWN:
+            {
+                int32 key;
+                int32 modifiers;
+                int32 key_repeat;
+                msg->FindInt32("modifiers", &modifiers);
+                msg->FindInt32("be:key_repeat", &key_repeat);
+                if (msg->what == B_KEY_DOWN)
+                {
+                    uint8 bytes[3];
+                    int8 i = 0;
+
+                    for(; i < 3; i++)
+                    {
+                        status_t status = msg->FindInt8("byte", i, (int8 *) &bytes[i]);
+                        if (status != B_OK)
+                            break;
+                    }
+                    miniquad_char(bytes, i, modifiers, key_repeat);
+                }
+                msg->FindInt32("key", &key);
+                miniquad_key_down(key, modifiers, key_repeat);
+            }
+            break;
+        case B_KEY_UP:
+        case B_UNMAPPED_KEY_UP:
+            {
+                int32 key;
+                int32 modifiers;
+                msg->FindInt32("modifiers", &modifiers);
+                msg->FindInt32("key", &key);
+                miniquad_key_up(key, modifiers);
+            }
+            break;
+    }
     BGLView::MessageReceived(msg);
 }
 
@@ -124,6 +174,8 @@ class QuadWindow : public BDirectWindow {
                 virtual bool    QuitRequested();
                 virtual void    MessageReceived(BMessage* msg);
 };
+
+#include <interface/InterfaceDefs.h>
 
 extern "C" {
     BRect* new_brect(float left, float top, float right, float bottom)
@@ -142,7 +194,7 @@ extern "C" {
        return new(std::nothrow) QuadView(bounds, "objectView", B_FOLLOW_ALL_SIDES, type);
  
     }
-    
+
     int shim_app_run(ShimApp* app, BRect* rect, const char* name, QuadView *view, bool fullscreen) {
         QuadWindow* fQuadWindow = new QuadWindow(*rect, name, view); 
         fQuadWindow->CenterOnScreen();
@@ -182,6 +234,7 @@ QuadWindow::QuadWindow(BRect rect, const char* name, QuadView *view)
         view->MoveTo(bounds.left, bounds.top);
         view->ResizeTo(bounds.right, bounds.bottom);    
         subView->AddChild(view);
+        view->MakeFocus();
 
         miniquad_view_changed(static_cast<int>(bounds.right), static_cast<int>(bounds.bottom));
         miniquad_view_created();
