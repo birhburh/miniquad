@@ -419,13 +419,11 @@ fn send_message(message: &Message) {
 
 #[no_mangle]
 unsafe extern "C" fn miniquad_view_created() {
-    println!("miniquad_view_created");
     send_message(&Message::ViewCreated);
 }
 
 #[no_mangle]
 unsafe extern "C" fn miniquad_view_destroyed() {
-    println!("miniquad_view_destroyed");
     send_message(&Message::ViewDestroyed);
 }
 
@@ -600,7 +598,6 @@ struct MainThreadState {
 
 impl MainThreadState {
     fn process_message(&mut self, msg: Message) {
-        dbg!(&msg);
         match msg {
             Message::ViewCreated => {
                 self.running = true;
@@ -644,7 +641,6 @@ impl MainThreadState {
                 modifiers,
                 repeat,
             } => {
-                dbg!(convert_keycode(keycode));
                 if let Some(key) = convert_keycode(keycode) {
                     let modifiers = unsafe { key_mods(modifiers) };
                     self.event_handler

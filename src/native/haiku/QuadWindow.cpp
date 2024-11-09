@@ -98,7 +98,6 @@ QuadView::DetachedFromWindow()
 void
 QuadView::FrameResized(float width, float height)
 {
-    printf("FrameResized: %.2f %.2f\n", width, height);
     miniquad_view_changed(static_cast<int>(width), static_cast<int>(height));
     BGLView::FrameResized(width, height);
 }
@@ -112,7 +111,6 @@ QuadView::MouseMoved(BPoint point, uint32, const BMessage*)
 void
 QuadView::MouseDown(BPoint point)
 {
-    printf("Mouse Down!\n");
     if (!IsFocus())
         MakeFocus();
     miniquad_mouse_button_down(point.x, point.y);
