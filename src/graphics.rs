@@ -317,6 +317,7 @@ pub enum TextureFormat {
     RGBA16F,
     Depth,
     Depth32,
+    DepthStencil,
     Alpha,
 }
 impl TextureFormat {
@@ -329,6 +330,7 @@ impl TextureFormat {
             TextureFormat::RGBA16F => 8 * square,
             TextureFormat::Depth => 2 * square,
             TextureFormat::Depth32 => 4 * square,
+            TextureFormat::DepthStencil => 4 * square,
             TextureFormat::Alpha => 1 * square,
         }
     }

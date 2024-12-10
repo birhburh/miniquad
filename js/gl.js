@@ -99,7 +99,7 @@ canvas.focus();
 
 canvas.requestPointerLock = canvas.requestPointerLock ||
     canvas.mozRequestPointerLock ||
-    // pointer lock in any form is not supported on iOS safari 
+    // pointer lock in any form is not supported on iOS safari
     // https://developer.mozilla.org/en-US/docs/Web/API/Pointer_Lock_API#browser_compatibility
     (function () { });
 document.exitPointerLock = document.exitPointerLock ||
@@ -602,6 +602,8 @@ function texture_size(internalFormat, width, height) {
     else if (internalFormat == gl.RGB) {
         return width * height * 3;
     } else if (internalFormat == gl.RGBA) {
+        return width * height * 4;
+    } else if (internalFormat == gl.DEPTH_STENCIL) {
         return width * height * 4;
     } else { // TextureFormat::RGB565 | TextureFormat::RGBA4 | TextureFormat::RGBA5551
         return width * height * 3;

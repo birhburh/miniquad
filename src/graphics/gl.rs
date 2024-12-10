@@ -79,6 +79,10 @@ impl TextureFormat {
             TextureFormat::RGBA16F => GL_RGBA16F,
             TextureFormat::Depth => GL_DEPTH_COMPONENT16,
             TextureFormat::Depth32 => GL_DEPTH_COMPONENT32,
+            #[cfg(not(target_arch = "wasm32"))]
+            TextureFormat::DepthStencil => GL_DEPTH24_STENCIL8,
+            #[cfg(target_arch = "wasm32")]
+            TextureFormat::DepthStencil => GL_DEPTH_STENCIL,
             #[cfg(target_arch = "wasm32")]
             TextureFormat::Alpha => GL_ALPHA,
             #[cfg(not(target_arch = "wasm32"))]
@@ -96,6 +100,10 @@ impl From<TextureFormat> for (GLenum, GLenum, GLenum) {
             TextureFormat::RGBA16F => (GL_RGBA16F, GL_RGBA, GL_FLOAT),
             TextureFormat::Depth => (GL_DEPTH_COMPONENT, GL_DEPTH_COMPONENT, GL_UNSIGNED_SHORT),
             TextureFormat::Depth32 => (GL_DEPTH_COMPONENT, GL_DEPTH_COMPONENT, GL_FLOAT),
+            #[cfg(not(target_arch = "wasm32"))]
+            TextureFormat::DepthStencil => (GL_DEPTH24_STENCIL8, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8),
+            #[cfg(target_arch = "wasm32")]
+            TextureFormat::DepthStencil => (GL_DEPTH_STENCIL, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8),
             #[cfg(target_arch = "wasm32")]
             TextureFormat::Alpha => (GL_ALPHA, GL_ALPHA, GL_UNSIGNED_BYTE),
             #[cfg(not(target_arch = "wasm32"))]
@@ -1105,7 +1113,7 @@ impl RenderingBackend for GlContext {
                     let raw = texture.raw.texture().unwrap();
                     glFramebufferTexture2D(
                         GL_FRAMEBUFFER,
-                        GL_DEPTH_ATTACHMENT,
+                        GL_DEPTH_STENCIL_ATTACHMENT,
                         GL_TEXTURE_2D,
                         raw,
                         0,
@@ -1149,7 +1157,7 @@ impl RenderingBackend for GlContext {
             gl_fb,
             color_textures: color_img.to_vec(),
             resolves,
-            depth_texture: depth_img,
+            depth_texture: None,
         };
 
         RenderPass(self.passes.add(pass))

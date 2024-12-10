@@ -161,6 +161,7 @@ impl From<TextureFormat> for MTLPixelFormat {
             TextureFormat::RGBA8 => MTLPixelFormat::RGBA8Unorm,
             //TODO: Depth16Unorm ?
             TextureFormat::Depth => MTLPixelFormat::Depth32Float_Stencil8,
+            TextureFormat::DepthStencil => MTLPixelFormat::Depth32Float_Stencil8,
             TextureFormat::RGBA16F => MTLPixelFormat::RGBA16Float,
             _ => todo!(),
         }
@@ -559,6 +560,9 @@ impl RenderingBackend for MetalContext {
 
                 let stencil_attachment = msg_send_![render_pass_desc, stencilAttachment];
                 msg_send_![stencil_attachment, setTexture: depth_texture];
+                msg_send_![stencil_attachment, setLoadAction: MTLLoadAction::Load];
+                msg_send_![stencil_attachment, setStoreAction: MTLStoreAction::Store];
+                msg_send_![stencil_attachment, setClearStencil:0.];
             }
             let pass = RenderPassInternal {
                 render_pass_desc,
