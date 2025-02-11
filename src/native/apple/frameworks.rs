@@ -190,6 +190,7 @@ extern "C" {
     ) -> ObjcId;
     pub fn CGMainDisplayID() -> u32;
     pub fn CGDisplayPixelsHigh(display: u32) -> u64;
+    pub fn CGDisplayPixelsWide(display: u32) -> u64;
     pub fn CGColorCreateGenericRGB(red: f64, green: f64, blue: f64, alpha: f64) -> ObjcId;
     pub fn CGAssociateMouseAndMouseCursorPosition(connected: bool);
     pub fn CGWarpMouseCursorPosition(newCursorPosition: NSPoint);

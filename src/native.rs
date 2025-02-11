@@ -8,6 +8,9 @@ pub(crate) struct DroppedFiles {
     pub bytes: Vec<Vec<u8>>,
 }
 pub(crate) struct NativeDisplayData {
+    pub monitor_width: i32,
+    pub monitor_height: i32,
+
     pub screen_width: i32,
     pub screen_height: i32,
     pub screen_position: (u32, u32),
@@ -40,6 +43,8 @@ impl NativeDisplayData {
         clipboard: Box<dyn Clipboard>,
     ) -> NativeDisplayData {
         NativeDisplayData {
+            monitor_width: 0,
+            monitor_height: 0,
             screen_width,
             screen_height,
             screen_position: (0, 0),

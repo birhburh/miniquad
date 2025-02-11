@@ -180,6 +180,17 @@ impl MacosDisplay {
         d.screen_width = screen_width;
         d.screen_height = screen_height;
 
+        let screen = msg_send_![self.window, screen];
+        let device_description = msg_send_![screen, deviceDescription];
+        let key = str_to_nsstring("NSScreenNumber");
+        let display_id = msg_send_![device_description, objectForKey:key];
+        let display_id: u32 = msg_send![display_id, unsignedIntValue];
+        let width = unsafe { CGDisplayPixelsWide(display_id) };
+        let height = unsafe { CGDisplayPixelsHigh(display_id) };
+
+        d.monitor_width = width as i32;
+        d.monitor_height = height as i32;
+
         if dim_changed {
             Some((screen_width, screen_height))
         } else {

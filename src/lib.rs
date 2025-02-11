@@ -137,6 +137,12 @@ pub mod window {
         (d.screen_width as f32, d.screen_height as f32)
     }
 
+    /// The current monitor size in pixels
+    pub fn monitor_size() -> (f32, f32) {
+        let d = native_display().lock().unwrap();
+        (d.monitor_width as f32, d.monitor_height as f32)
+    }
+
     /// The dpi scaling factor (window pixels to framebuffer pixels)
     /// NOTE: [High DPI Rendering](../conf/index.html#high-dpi-rendering)
     pub fn dpi_scale() -> f32 {
